@@ -278,11 +278,6 @@ const typeFromSheet=type=>{
 const typeToSheet=type=>type==='income'?'gelir':type==='savings'?'birikim':'gider';
 const txMonth=t=>(t.month||String(t.date||'').slice(0,7));
 const txDateTime=t=>t.createdAt||t.date||'';
-const txSortDate=t=>String(t.date||t.createdAt||txMonth(t)+'-01');
-const txDisplayDate=t=>{
-  const date=String(t.date||txMonth(t)+'-01');
-  return date + ((t.recurring||t.recurringId)?' • Recurring':'');
-};
 const localDateTime=()=>{
   const d=new Date(Date.now()-new Date().getTimezoneOffset()*60000);
   return d.toISOString().slice(0,19).replace('T',' ');
@@ -311,89 +306,64 @@ const weeklyCountInMonth=(ym,weekday)=>{
   while(d.getMonth()===month){if(d.getDay()===weekday)count++;d.setDate(d.getDate()+1);}
   return count;
 };
-const recurringStartDate=item=>String(item.startDate||item.date||item.createdAt||new Date().toISOString().slice(0,10)).slice(0,10);
-const lastDayOfMonth=(year,month)=>new Date(year,month,0).getDate();
-const dueDateForMonth=(startDate,ym)=>{
-  const day=parseInt(startDate.slice(8,10),10)||1;
-  const year=parseInt(ym.slice(0,4),10);
-  const month=parseInt(ym.slice(5,7),10);
-  const safeDay=Math.min(day,lastDayOfMonth(year,month));
-  return `${ym}-${String(safeDay).padStart(2,'0')}`;
+const isoDate=d=>{
+  const copy=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  copy.setMinutes(copy.getMinutes()-copy.getTimezoneOffset());
+  return copy.toISOString().slice(0,10);
+};
+const parseDate=value=>{
+  const match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);
+  if(!match)return null;
+  const [y,m,d]=match[0].split('-').map(Number);
+  const parsed=new Date(y,m-1,d);
+  return isNaN(parsed.getTime())?null:parsed;
+};
+const daysInMonth=(year,monthIndex)=>new Date(year,monthIndex+1,0).getDate();
+const recurringStartDate=item=>parseDate(item.startDate)||parseDate(item.date)||parseDate(item.createdAt)||new Date();
+const recurringDueDatesForMonth=(item,ym=currentMonth)=>{
+  const start=recurringStartDate(item);
+  const year=parseInt(ym.slice(0,4),10),month=parseInt(ym.slice(5,7),10)-1;
+  const monthStart=new Date(year,month,1);
+  const monthEnd=new Date(year,month,daysInMonth(year,month));
+  const frequency=item.frequency||'monthly';
+  if(monthEnd<start)return [];
+  if(frequency==='weekly'||frequency==='biweekly'){
+    const step=frequency==='weekly'?7:14;
+    const dates=[];
+    let d=new Date(start.getFullYear(),start.getMonth(),start.getDate());
+    while(d<monthStart)d.setDate(d.getDate()+step);
+    while(d<=monthEnd){dates.push(isoDate(d));d.setDate(d.getDate()+step);}
+    return dates;
+  }
+  if(frequency==='yearly'){
+    if(month!==start.getMonth())return [];
+    const day=Math.min(start.getDate(),daysInMonth(year,month));
+    const d=new Date(year,month,day);
+    return d>=start?[isoDate(d)]:[];
+  }
+  const day=Math.min(start.getDate(),daysInMonth(year,month));
+  const d=new Date(year,month,day);
+  return d>=start?[isoDate(d)]:[];
 };
 const recurringForMonth=(ym=currentMonth)=>{
-  return recurring.filter(item=>item.active!==false && parseFloat(item.amount||0)>0).map(item=>{
+  return recurring.filter(item=>parseFloat(item.amount||0)>0).flatMap(item=>{
     const type=typeFromSheet(item.type||'expense');
-    const frequency=item.frequency||'monthly';
     const baseAmount=parseFloat(item.amount||0);
-    const startDate=recurringStartDate(item);
-    const dueDate=frequency==='monthly'?dueDateForMonth(startDate,ym):ym+'-01';
-    const multiplier=frequency==='weekly'?weeklyCountInMonth(ym,parseInt(item.weekday||1,10)):1;
-    return {
-    type,
-    person:item.person||'Recurring',
-    desc:item.desc,
-    amount:baseAmount*multiplier,
-    cat:item.cat||'other',
-    date:dueDate,
-    month:ym,
-    createdAt:dueDate+' • Recurring',
-    recurring:true,
-    recId:item.id
-  }});
-};
-
-function transactionExistsForRecurring(item,dueDate){
-  const type=typeFromSheet(item.type||'expense');
-  const amount=parseFloat(item.amount||0);
-  return transactions.some(t=>
-    String(t.date||'').slice(0,10)===dueDate &&
-    typeFromSheet(t.type)===type &&
-    String(t.person||'')===String(item.person||'Recurring') &&
-    String(t.desc||'')===String(item.desc||'') &&
-    String(t.cat||'other')===String(item.cat||'other') &&
-    Math.abs((parseFloat(t.amount)||0)-amount)<0.001
-  );
-}
-
-async function generateDueRecurringTransactions(){
-  const today=new Date().toISOString().slice(0,10);
-  const thisMonth=today.slice(0,7);
-  const generated=[];
-  for(const item of recurring){
-    if(item.active===false)continue;
-    if(typeFromSheet(item.type||'expense')!=='expense')continue;
-    const frequency=item.frequency||'monthly';
-    if(frequency!=='monthly')continue;
-    const amount=parseFloat(item.amount||0);
-    if(!amount)continue;
-    const startDate=recurringStartDate(item);
-    const dueDate=dueDateForMonth(startDate,thisMonth);
-    if(dueDate>today || dueDate<startDate)continue;
-    if(transactionExistsForRecurring(item,dueDate))continue;
-    const tx={
-      type:'expense',
+    return recurringDueDatesForMonth(item,ym).map((dueDate,index)=>({
+      type,
       person:item.person||'Recurring',
       desc:item.desc,
-      amount,
+      amount:baseAmount,
       cat:item.cat||'other',
       date:dueDate,
-      month:thisMonth,
-      createdAt:localDateTime(),
-      recurringId:item.id
-    };
-    transactions.push(tx);
-    generated.push(tx);
-  }
-  if(generated.length){
-    saveLocal();
-    renderAll();
-    for(const tx of generated){
-      try{await pushTx(tx,false);}catch(e){setSyncState('err','Recurring saved locally');}
-    }
-    setSyncState('ok',generated.length+' recurring added');
-  }
-}
-
+      month:dueDate.slice(0,7),
+      createdAt:dueDate+' • Recurring',
+      recurring:true,
+      recId:item.id,
+      occurrence:index+1
+    }));
+  });
+};
 const monthTx=(ym)=>[...manualMonthTx(ym),...recurringForMonth(ym)];
 
 const setSyncState=(state,txt)=>{
@@ -442,16 +412,15 @@ async function syncNow(){
     }
     setSyncState('ok','Synced '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
     renderAll();
-    await generateDueRecurringTransactions();
   }catch(e){
     setSyncState('err','Offline');
   }
 }
 
-async function pushTx(tx, doSync=true){
+async function pushTx(tx){
   const p=new URLSearchParams({action:'add',date:tx.date,type:typeToSheet(tx.type),person:tx.person,desc:tx.desc,cat:tx.cat,amount:tx.amount});
   await fetch(GS_URL+'?'+p);
-  if(doSync)await syncNow();
+  await syncNow();
 }
 
 async function deleteTxRemote(idx){
@@ -536,8 +505,7 @@ async function addTx(){
       cat,
       person,
       createdAt:localDateTime(),
-      startDate:date,
-      active:true
+      startDate:date
     });
     saveLocal();renderAll();
     msg.style.color='var(--success)';msg.textContent='Recurring salary saved.';
@@ -555,8 +523,7 @@ async function addTx(){
       cat,
       person,
       createdAt:localDateTime(),
-      startDate:date,
-      active:true
+      startDate:date
     });
     saveLocal();renderAll();
     msg.style.color='var(--success)';msg.textContent='Monthly recurring expense saved.';
@@ -607,12 +574,12 @@ function renderCatSummary(){
 }
 
 function renderRecent(){
-  const tx=[...manualMonthTx()].sort((a,b)=>txSortDate(b).localeCompare(txSortDate(a))).slice(0,6);
+  const tx=[...manualMonthTx()].sort((a,b)=>txDateTime(b).localeCompare(txDateTime(a))).slice(0,6);
   if(!tx.length){document.getElementById('recent').innerHTML='<p class="empty">No transactions yet</p>';return;}
   document.getElementById('recent').innerHTML=tx.map(t=>`
     <div class="tx-item">
       <div class="tx-dot" style="background:${catColor(t.cat)}"></div>
-      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${t.person} - ${txDisplayDate(t)}</div></div>
+      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${t.person} - ${txDateTime(t)}</div></div>
       <span class="tx-amt ${typeClass(t.type)}">${typeSign(t.type)}${fmt(t.amount)}</span>
     </div>`).join('');
 }
@@ -627,7 +594,7 @@ function renderRecurringSummary(){
   el.innerHTML=tx.map(t=>`
     <div class="tx-item">
       <div class="tx-dot" style="background:${catColor(t.cat)}"></div>
-      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${txDisplayDate(t)}</div></div>
+      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${t.createdAt}</div></div>
       <span class="tx-amt ${typeClass(t.type)}">${typeSign(t.type)}${fmt(t.amount)}</span>
     </div>`).join('')+`<div style="display:flex;justify-content:space-between;padding-top:10px;font-size:13px;font-weight:600;"><span>Recurring income</span><span style="color:var(--success)">${fmt(income)}</span></div><div style="display:flex;justify-content:space-between;padding-top:4px;font-size:13px;font-weight:600;"><span>Recurring expenses</span><span style="color:var(--danger)">${fmt(expense)}</span></div>`;
 }
@@ -670,7 +637,7 @@ function renderChart(){
 function renderTxList(){
   const ftype=document.getElementById('filter-type').value;
   const fperson=document.getElementById('filter-person').value;
-  let tx=[...monthTx()].sort((a,b)=>txSortDate(b).localeCompare(txSortDate(a)));
+  let tx=[...monthTx()].sort((a,b)=>txDateTime(b).localeCompare(txDateTime(a)));
   if(ftype)tx=tx.filter(t=>t.type===ftype);
   if(fperson)tx=tx.filter(t=>t.person===fperson);
   if(!tx.length){document.getElementById('tx-list').innerHTML='<p class="empty">No transactions found</p>';return;}
@@ -678,7 +645,7 @@ function renderTxList(){
     const idx=transactions.indexOf(t);
     return`<div class="tx-item">
       <div class="tx-dot" style="background:${catColor(t.cat)}"></div>
-      <div class="tx-info"><div class="tx-name">${t.desc}<span class="badge badge-${typeClass(t.type)}">${typeLabel(t.type)}</span></div><div class="tx-meta">${catLabel(t.cat)} - ${t.person} - ${txDisplayDate(t)}</div></div>
+      <div class="tx-info"><div class="tx-name">${t.desc}<span class="badge badge-${typeClass(t.type)}">${typeLabel(t.type)}</span></div><div class="tx-meta">${catLabel(t.cat)} - ${t.person} - ${txDateTime(t)}</div></div>
       <span class="tx-amt ${typeClass(t.type)}">${typeSign(t.type)}${fmt(t.amount)}</span>
       ${t.recurring?'<span class="badge badge-expense">Recurring</span>':`<button class="btn-del" onclick="deleteTxRemote(${idx})">Delete</button>`}
     </div>`;
