@@ -300,71 +300,113 @@ const monthName=ym=>{const[y,m]=ym.split('-');return new Date(y,m-1,1).toLocaleD
 const chMonth=d=>{const[y,m]=currentMonth.split('-').map(Number);currentMonth=new Date(y,m-1+d,1).toISOString().slice(0,7);renderAll();};
 const manualMonthTx=(ym)=>transactions.filter(t=>txMonth(t)===(ym||currentMonth));
 const txKey=t=>[txMonth(t),txDateTime(t),typeFromSheet(t.type),String(t.person||''),String(t.desc||''),String(t.cat||''),String(parseFloat(t.amount||0))].join('|');
-const weeklyCountInMonth=(ym,weekday)=>{
-  const year=parseInt(ym.slice(0,4),10),month=parseInt(ym.slice(5,7),10)-1;
-  let count=0,d=new Date(year,month,1);
-  while(d.getMonth()===month){if(d.getDay()===weekday)count++;d.setDate(d.getDate()+1);}
-  return count;
+const parseLocalDate=(value)=>{
+  if(!value)return null;
+  const text=String(value).slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(text))return null;
+  const d=new Date(text+'T00:00:00');
+  return isNaN(d.getTime())?null:d;
 };
-const isoDate=d=>{
-  const copy=new Date(d.getFullYear(),d.getMonth(),d.getDate());
-  copy.setMinutes(copy.getMinutes()-copy.getTimezoneOffset());
+const dateToYMD=(d)=>{
+  const copy=new Date(d.getTime()-d.getTimezoneOffset()*60000);
   return copy.toISOString().slice(0,10);
 };
-const parseDate=value=>{
-  const match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);
-  if(!match)return null;
-  const [y,m,d]=match[0].split('-').map(Number);
-  const parsed=new Date(y,m-1,d);
-  return isNaN(parsed.getTime())?null:parsed;
+const lastDayOfMonth=(year,monthIndex)=>new Date(year,monthIndex+1,0).getDate();
+const addDays=(d,days)=>{const x=new Date(d);x.setDate(x.getDate()+days);return x;};
+const recurringStartDate=(item)=>String(item.startDate||item.date||item.createdAt||new Date().toISOString()).slice(0,10);
+const generatedExists=(item,dueDate)=>{
+  const dueMonth=dueDate.slice(0,7);
+  const amount=parseFloat(item.amount||0);
+  const type=typeFromSheet(item.type||'expense');
+  return transactions.some(t=>
+    String(t.date||'').slice(0,10)===dueDate &&
+    txMonth(t)===dueMonth &&
+    typeFromSheet(t.type)===type &&
+    String(t.person||'')===String(item.person||'Recurring') &&
+    String(t.desc||'')===String(item.desc||'') &&
+    String(t.cat||'other')===String(item.cat||'other') &&
+    parseFloat(t.amount||0)===amount
+  );
 };
-const daysInMonth=(year,monthIndex)=>new Date(year,monthIndex+1,0).getDate();
-const recurringStartDate=item=>parseDate(item.startDate)||parseDate(item.date)||parseDate(item.createdAt)||new Date();
-const recurringDueDatesForMonth=(item,ym=currentMonth)=>{
-  const start=recurringStartDate(item);
+const dueDatesForRecurringInMonth=(item,ym)=>{
+  const start=parseLocalDate(recurringStartDate(item));
+  if(!start)return [];
+  const frequency=item.frequency||'monthly';
   const year=parseInt(ym.slice(0,4),10),month=parseInt(ym.slice(5,7),10)-1;
   const monthStart=new Date(year,month,1);
-  const monthEnd=new Date(year,month,daysInMonth(year,month));
-  const frequency=item.frequency||'monthly';
-  if(monthEnd<start)return [];
-  if(frequency==='weekly'||frequency==='biweekly'){
-    const step=frequency==='weekly'?7:14;
-    const dates=[];
-    let d=new Date(start.getFullYear(),start.getMonth(),start.getDate());
-    while(d<monthStart)d.setDate(d.getDate()+step);
-    while(d<=monthEnd){dates.push(isoDate(d));d.setDate(d.getDate()+step);}
-    return dates;
+  const monthEnd=new Date(year,month,lastDayOfMonth(year,month));
+  const dates=[];
+  if(frequency==='monthly'){
+    if(start>monthEnd)return [];
+    const day=Math.min(start.getDate(),lastDayOfMonth(year,month));
+    const due=new Date(year,month,day);
+    if(due>=start)dates.push(dateToYMD(due));
+  }else if(frequency==='weekly'||frequency==='biweekly'){
+    const step=frequency==='biweekly'?14:7;
+    let due=new Date(start);
+    while(due<monthStart)due=addDays(due,step);
+    while(due<=monthEnd){dates.push(dateToYMD(due));due=addDays(due,step);}
+  }else if(frequency==='yearly'){
+    if(start>monthEnd)return [];
+    if(start.getMonth()===month){
+      const day=Math.min(start.getDate(),lastDayOfMonth(year,month));
+      const due=new Date(year,month,day);
+      if(due>=start)dates.push(dateToYMD(due));
+    }
   }
-  if(frequency==='yearly'){
-    if(month!==start.getMonth())return [];
-    const day=Math.min(start.getDate(),daysInMonth(year,month));
-    const d=new Date(year,month,day);
-    return d>=start?[isoDate(d)]:[];
-  }
-  const day=Math.min(start.getDate(),daysInMonth(year,month));
-  const d=new Date(year,month,day);
-  return d>=start?[isoDate(d)]:[];
+  return dates;
 };
 const recurringForMonth=(ym=currentMonth)=>{
   return recurring.filter(item=>parseFloat(item.amount||0)>0).flatMap(item=>{
     const type=typeFromSheet(item.type||'expense');
-    const baseAmount=parseFloat(item.amount||0);
-    return recurringDueDatesForMonth(item,ym).map((dueDate,index)=>({
+    return dueDatesForRecurringInMonth(item,ym).filter(dueDate=>!generatedExists(item,dueDate)).map(dueDate=>({
       type,
       person:item.person||'Recurring',
       desc:item.desc,
-      amount:baseAmount,
+      amount:parseFloat(item.amount||0),
       cat:item.cat||'other',
       date:dueDate,
       month:dueDate.slice(0,7),
       createdAt:dueDate+' • Recurring',
       recurring:true,
-      recId:item.id,
-      occurrence:index+1
+      recId:item.id
     }));
   });
 };
 const monthTx=(ym)=>[...manualMonthTx(ym),...recurringForMonth(ym)];
+let generatingRecurring=false;
+async function generateDueRecurringTransactions(){
+  if(generatingRecurring)return 0;
+  generatingRecurring=true;
+  let created=0;
+  const today=dateToYMD(new Date());
+  const ym=today.slice(0,7);
+  try{
+    for(const item of recurring){
+      if(parseFloat(item.amount||0)<=0)continue;
+      const dates=dueDatesForRecurringInMonth(item,ym).filter(d=>d<=today&&!generatedExists(item,d));
+      for(const dueDate of dates){
+        const tx={
+          type:typeFromSheet(item.type||'expense'),
+          person:item.person||'Recurring',
+          desc:item.desc,
+          amount:parseFloat(item.amount||0),
+          cat:item.cat||'other',
+          date:dueDate,
+          month:dueDate.slice(0,7),
+          createdAt:localDateTime()
+        };
+        transactions.push(tx);
+        created++;
+        saveLocal();
+        try{await pushTx(tx,false);}catch(e){setSyncState('err','Recurring saved locally');}
+      }
+    }
+  }finally{
+    generatingRecurring=false;
+  }
+  return created;
+}
 
 const setSyncState=(state,txt)=>{
   const dot=document.getElementById('sdot'), lbl=document.getElementById('slabel');
@@ -410,17 +452,18 @@ async function syncNow(){
       }).filter(t=>txMonth(t).length===7 && t.amount>0 && !deletedKeys.includes(txKey(t)));
       saveLocal();
     }
-    setSyncState('ok','Synced '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+    const generatedCount=await generateDueRecurringTransactions();
+    setSyncState('ok',generatedCount?('Synced + '+generatedCount+' recurring'):'Synced '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
     renderAll();
   }catch(e){
     setSyncState('err','Offline');
   }
 }
 
-async function pushTx(tx){
+async function pushTx(tx,doSync=true){
   const p=new URLSearchParams({action:'add',date:tx.date,type:typeToSheet(tx.type),person:tx.person,desc:tx.desc,cat:tx.cat,amount:tx.amount});
   await fetch(GS_URL+'?'+p);
-  await syncNow();
+  if(doSync)await syncNow();
 }
 
 async function deleteTxRemote(idx){
@@ -500,12 +543,12 @@ async function addTx(){
       type:'income',
       frequency,
       weekday:salaryDate.getDay(),
+      startDate:date,
       desc,
       amount,
       cat,
       person,
-      createdAt:localDateTime(),
-      startDate:date
+      createdAt:localDateTime()
     });
     saveLocal();renderAll();
     msg.style.color='var(--success)';msg.textContent='Recurring salary saved.';
@@ -518,12 +561,12 @@ async function addTx(){
       id:'rec_'+Date.now(),
       type:'expense',
       frequency:'monthly',
+      startDate:date,
       desc,
       amount,
       cat,
       person,
-      createdAt:localDateTime(),
-      startDate:date
+      createdAt:localDateTime()
     });
     saveLocal();renderAll();
     msg.style.color='var(--success)';msg.textContent='Monthly recurring expense saved.';
