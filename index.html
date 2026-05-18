@@ -278,6 +278,11 @@ const typeFromSheet=type=>{
 const typeToSheet=type=>type==='income'?'gelir':type==='savings'?'birikim':'gider';
 const txMonth=t=>(t.month||String(t.date||'').slice(0,7));
 const txDateTime=t=>t.createdAt||t.date||'';
+const txSortDate=t=>String(t.date||t.createdAt||txMonth(t)+'-01');
+const txDisplayDate=t=>{
+  const date=String(t.date||txMonth(t)+'-01');
+  return date + ((t.recurring||t.recurringId)?' • Recurring':'');
+};
 const localDateTime=()=>{
   const d=new Date(Date.now()-new Date().getTimezoneOffset()*60000);
   return d.toISOString().slice(0,19).replace('T',' ');
@@ -290,146 +295,106 @@ const loadLocal=()=>{try{
   transactions=JSON.parse(localStorage.getItem('fb_tx')||'[]').map(t=>({...t,type:typeFromSheet(t.type),month:t.month||String(t.date||'').slice(0,7)}));
   budgets=JSON.parse(localStorage.getItem('fb_bud')||'{}');
   const savedRecurring=JSON.parse(localStorage.getItem('fb_rec')||'[]');
-  recurring=Array.isArray(savedRecurring)?savedRecurring.map(r=>({...r,active:r.active!==false,startDate:r.startDate||r.date||(r.createdAt&&String(r.createdAt).slice(0,10))||undefined})):[];
+  recurring=Array.isArray(savedRecurring)?savedRecurring:[];
   const savedDeleted=JSON.parse(localStorage.getItem('fb_deleted')||'[]');
   deletedKeys=Array.isArray(savedDeleted)?savedDeleted:[];
 }catch(e){}};
 
 const fmt=n=>'EUR '+Math.abs(n).toLocaleString('nl-NL',{minimumFractionDigits:2,maximumFractionDigits:2});
-const formatDisplayDate=value=>{
-  const d=parseLocalDate(value);
-  if(!d)return String(value||'');
-  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
-};
-const txMeta=t=>`${catLabel(t.cat)} - ${t.person} - ${formatDisplayDate(t.date||txDateTime(t))}${(t.recurring||t.generatedRecurring||t.recurringId)?' - Recurring':''}`;
 const monthName=ym=>{const[y,m]=ym.split('-');return new Date(y,m-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});};
 const chMonth=d=>{const[y,m]=currentMonth.split('-').map(Number);currentMonth=new Date(y,m-1+d,1).toISOString().slice(0,7);renderAll();};
 const manualMonthTx=(ym)=>transactions.filter(t=>txMonth(t)===(ym||currentMonth));
 const txKey=t=>[txMonth(t),txDateTime(t),typeFromSheet(t.type),String(t.person||''),String(t.desc||''),String(t.cat||''),String(parseFloat(t.amount||0))].join('|');
-const pad2=n=>String(n).padStart(2,'0');
-const ymdLocal=d=>`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
-const parseLocalDate=value=>{
-  if(!value)return null;
-  const ss=String(value).slice(0,10);
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(ss))return null;
-  const [y,m,d]=ss.split('-').map(Number);
-  return new Date(y,m-1,d);
+const weeklyCountInMonth=(ym,weekday)=>{
+  const year=parseInt(ym.slice(0,4),10),month=parseInt(ym.slice(5,7),10)-1;
+  let count=0,d=new Date(year,month,1);
+  while(d.getMonth()===month){if(d.getDay()===weekday)count++;d.setDate(d.getDate()+1);}
+  return count;
 };
-const daysInMonth=(year,monthIndex)=>new Date(year,monthIndex+1,0).getDate();
-const fallbackStartDate=item=>{
-  return item.startDate||item.date||(item.createdAt&&String(item.createdAt).slice(0,10))||ymdLocal(new Date());
-};
-const sameGeneratedTxExists=(tx)=>transactions.some(t=>
-  String(t.date||'').slice(0,10)===String(tx.date||'').slice(0,10) &&
-  typeFromSheet(t.type)===typeFromSheet(tx.type) &&
-  String(t.person||'')===String(tx.person||'') &&
-  String(t.desc||'')===String(tx.desc||'') &&
-  String(t.cat||'')===String(tx.cat||'') &&
-  Number(parseFloat(t.amount||0).toFixed(2))===Number(parseFloat(tx.amount||0).toFixed(2))
-);
-const recurringDueDatesForMonth=(item,ym=currentMonth,limitToToday=false)=>{
-  if(item.active===false)return [];
-  const start=parseLocalDate(fallbackStartDate(item));
-  if(!start)return [];
-  const [year,monthNum]=ym.split('-').map(Number);
-  const month=monthNum-1;
-  const monthStart=new Date(year,month,1);
-  const monthEnd=new Date(year,month,daysInMonth(year,month));
-  const today=new Date();
-  const maxDate=limitToToday && ym===ymdLocal(today).slice(0,7) ? today : monthEnd;
-  const dates=[];
-  const freq=item.frequency||'monthly';
-  if(freq==='monthly'){
-    const dueDay=Math.min(start.getDate(),daysInMonth(year,month));
-    const due=new Date(year,month,dueDay);
-    if(due>=start && due>=monthStart && due<=maxDate)dates.push(due);
-  }else if(freq==='yearly'){
-    if(start.getMonth()===month){
-      const dueDay=Math.min(start.getDate(),daysInMonth(year,month));
-      const due=new Date(year,month,dueDay);
-      if(due>=start && due<=maxDate)dates.push(due);
-    }
-  }else if(freq==='weekly'||freq==='biweekly'){
-    const step=freq==='biweekly'?14:7;
-    let d=new Date(start);
-    while(d<monthStart)d.setDate(d.getDate()+step);
-    while(d<=monthEnd && d<=maxDate){
-      if(d>=start)dates.push(new Date(d));
-      d.setDate(d.getDate()+step);
-    }
-  }
-  return dates.map(ymdLocal);
+const recurringStartDate=item=>String(item.startDate||item.date||item.createdAt||new Date().toISOString().slice(0,10)).slice(0,10);
+const lastDayOfMonth=(year,month)=>new Date(year,month,0).getDate();
+const dueDateForMonth=(startDate,ym)=>{
+  const day=parseInt(startDate.slice(8,10),10)||1;
+  const year=parseInt(ym.slice(0,4),10);
+  const month=parseInt(ym.slice(5,7),10);
+  const safeDay=Math.min(day,lastDayOfMonth(year,month));
+  return `${ym}-${String(safeDay).padStart(2,'0')}`;
 };
 const recurringForMonth=(ym=currentMonth)=>{
-  const out=[];
-  recurring.filter(item=>parseFloat(item.amount||0)>0).forEach(item=>{
+  return recurring.filter(item=>item.active!==false && parseFloat(item.amount||0)>0).map(item=>{
     const type=typeFromSheet(item.type||'expense');
-    const dueDates=recurringDueDatesForMonth(item,ym,false);
-    dueDates.forEach(dueDate=>{
-      const tx={
-        type,
-        person:item.person||'Recurring',
-        desc:item.desc||'Recurring payment',
-        amount:parseFloat(item.amount)||0,
-        cat:item.cat||'other',
-        date:dueDate,
-        month:dueDate.slice(0,7),
-        createdAt:dueDate,
-        recurring:true,
-        recId:item.id
-      };
-      if(!sameGeneratedTxExists(tx))out.push(tx);
-    });
-  });
-  return out;
+    const frequency=item.frequency||'monthly';
+    const baseAmount=parseFloat(item.amount||0);
+    const startDate=recurringStartDate(item);
+    const dueDate=frequency==='monthly'?dueDateForMonth(startDate,ym):ym+'-01';
+    const multiplier=frequency==='weekly'?weeklyCountInMonth(ym,parseInt(item.weekday||1,10)):1;
+    return {
+    type,
+    person:item.person||'Recurring',
+    desc:item.desc,
+    amount:baseAmount*multiplier,
+    cat:item.cat||'other',
+    date:dueDate,
+    month:ym,
+    createdAt:dueDate+' • Recurring',
+    recurring:true,
+    recId:item.id
+  }});
 };
-const monthTx=(ym)=>[...manualMonthTx(ym),...recurringForMonth(ym)];
 
-const recurringDueDatesThisMonth=(item,today=new Date())=>recurringDueDatesForMonth(item,ymdLocal(today).slice(0,7),true);
-
-let recurringGenerationRunning=false;
-async function generateDueRecurringTransactions(){
-  if(recurringGenerationRunning)return 0;
-  recurringGenerationRunning=true;
-  let created=0;
-  try{
-    const today=new Date();
-    const newTxs=[];
-    for(const item of recurring){
-      if(parseFloat(item.amount||0)<=0)continue;
-      const dueDates=recurringDueDatesThisMonth(item,today);
-      for(const dueDate of dueDates){
-        const tx={
-          type:typeFromSheet(item.type||'expense'),
-          person:item.person||'Recurring',
-          desc:item.desc||'Recurring payment',
-          amount:parseFloat(item.amount)||0,
-          cat:item.cat||'other',
-          date:dueDate,
-          month:dueDate.slice(0,7),
-          createdAt:dueDate,
-          recurringId:item.id||'',
-          generatedRecurring:true
-        };
-        if(!sameGeneratedTxExists(tx))newTxs.push(tx);
-      }
-    }
-    if(newTxs.length){
-      transactions.push(...newTxs);
-      saveLocal();
-      renderAll();
-      for(const tx of newTxs){
-        try{await pushTx(tx,false);created++;}
-        catch(e){setSyncState('err','Recurring saved locally');}
-      }
-      saveLocal();
-    }
-  }finally{
-    recurringGenerationRunning=false;
-  }
-  if(created>0)setSyncState('ok',created+' recurring added');
-  return created;
+function transactionExistsForRecurring(item,dueDate){
+  const type=typeFromSheet(item.type||'expense');
+  const amount=parseFloat(item.amount||0);
+  return transactions.some(t=>
+    String(t.date||'').slice(0,10)===dueDate &&
+    typeFromSheet(t.type)===type &&
+    String(t.person||'')===String(item.person||'Recurring') &&
+    String(t.desc||'')===String(item.desc||'') &&
+    String(t.cat||'other')===String(item.cat||'other') &&
+    Math.abs((parseFloat(t.amount)||0)-amount)<0.001
+  );
 }
+
+async function generateDueRecurringTransactions(){
+  const today=new Date().toISOString().slice(0,10);
+  const thisMonth=today.slice(0,7);
+  const generated=[];
+  for(const item of recurring){
+    if(item.active===false)continue;
+    if(typeFromSheet(item.type||'expense')!=='expense')continue;
+    const frequency=item.frequency||'monthly';
+    if(frequency!=='monthly')continue;
+    const amount=parseFloat(item.amount||0);
+    if(!amount)continue;
+    const startDate=recurringStartDate(item);
+    const dueDate=dueDateForMonth(startDate,thisMonth);
+    if(dueDate>today || dueDate<startDate)continue;
+    if(transactionExistsForRecurring(item,dueDate))continue;
+    const tx={
+      type:'expense',
+      person:item.person||'Recurring',
+      desc:item.desc,
+      amount,
+      cat:item.cat||'other',
+      date:dueDate,
+      month:thisMonth,
+      createdAt:localDateTime(),
+      recurringId:item.id
+    };
+    transactions.push(tx);
+    generated.push(tx);
+  }
+  if(generated.length){
+    saveLocal();
+    renderAll();
+    for(const tx of generated){
+      try{await pushTx(tx,false);}catch(e){setSyncState('err','Recurring saved locally');}
+    }
+    setSyncState('ok',generated.length+' recurring added');
+  }
+}
+
+const monthTx=(ym)=>[...manualMonthTx(ym),...recurringForMonth(ym)];
 
 const setSyncState=(state,txt)=>{
   const dot=document.getElementById('sdot'), lbl=document.getElementById('slabel');
@@ -440,7 +405,6 @@ const setSyncState=(state,txt)=>{
 async function syncNow(){
   setSyncState('spin','Syncing...');
   try{
-    await generateDueRecurringTransactions();
     const r=await fetch(GS_URL+'?action=get&t='+Date.now());
     const raw=await r.json();
     const rows=Array.isArray(raw)?raw:(Array.isArray(raw.rows)?raw.rows:[]);
@@ -478,22 +442,14 @@ async function syncNow(){
     }
     setSyncState('ok','Synced '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
     renderAll();
+    await generateDueRecurringTransactions();
   }catch(e){
     setSyncState('err','Offline');
   }
 }
 
-async function pushTx(tx,doSync=true){
-  const p=new URLSearchParams({
-    action:'add',
-    date:tx.date,
-    type:typeToSheet(tx.type),
-    person:tx.person,
-    desc:tx.desc,
-    cat:tx.cat,
-    amount:tx.amount,
-    recurringId:tx.recurringId||''
-  });
+async function pushTx(tx, doSync=true){
+  const p=new URLSearchParams({action:'add',date:tx.date,type:typeToSheet(tx.type),person:tx.person,desc:tx.desc,cat:tx.cat,amount:tx.amount});
   await fetch(GS_URL+'?'+p);
   if(doSync)await syncNow();
 }
@@ -579,12 +535,11 @@ async function addTx(){
       amount,
       cat,
       person,
+      createdAt:localDateTime(),
       startDate:date,
-      active:true,
-      createdAt:localDateTime()
+      active:true
     });
     saveLocal();renderAll();
-    generateDueRecurringTransactions();
     msg.style.color='var(--success)';msg.textContent='Recurring salary saved.';
     document.getElementById('f-desc').value='';document.getElementById('f-amount').value='';
     setTimeout(()=>msg.textContent='',3000);
@@ -599,12 +554,11 @@ async function addTx(){
       amount,
       cat,
       person,
+      createdAt:localDateTime(),
       startDate:date,
-      active:true,
-      createdAt:localDateTime()
+      active:true
     });
     saveLocal();renderAll();
-    generateDueRecurringTransactions();
     msg.style.color='var(--success)';msg.textContent='Monthly recurring expense saved.';
     document.getElementById('f-desc').value='';document.getElementById('f-amount').value='';document.getElementById('f-repeat').checked=false;
     toggleRepeatStyle();
@@ -653,12 +607,12 @@ function renderCatSummary(){
 }
 
 function renderRecent(){
-  const tx=[...manualMonthTx()].sort((a,b)=>txDateTime(b).localeCompare(txDateTime(a))).slice(0,6);
+  const tx=[...manualMonthTx()].sort((a,b)=>txSortDate(b).localeCompare(txSortDate(a))).slice(0,6);
   if(!tx.length){document.getElementById('recent').innerHTML='<p class="empty">No transactions yet</p>';return;}
   document.getElementById('recent').innerHTML=tx.map(t=>`
     <div class="tx-item">
       <div class="tx-dot" style="background:${catColor(t.cat)}"></div>
-      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${txMeta(t)}</div></div>
+      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${t.person} - ${txDisplayDate(t)}</div></div>
       <span class="tx-amt ${typeClass(t.type)}">${typeSign(t.type)}${fmt(t.amount)}</span>
     </div>`).join('');
 }
@@ -673,7 +627,7 @@ function renderRecurringSummary(){
   el.innerHTML=tx.map(t=>`
     <div class="tx-item">
       <div class="tx-dot" style="background:${catColor(t.cat)}"></div>
-      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${formatDisplayDate(t.date)} - Recurring</div></div>
+      <div class="tx-info"><div class="tx-name">${t.desc}</div><div class="tx-meta">${catLabel(t.cat)} - ${txDisplayDate(t)}</div></div>
       <span class="tx-amt ${typeClass(t.type)}">${typeSign(t.type)}${fmt(t.amount)}</span>
     </div>`).join('')+`<div style="display:flex;justify-content:space-between;padding-top:10px;font-size:13px;font-weight:600;"><span>Recurring income</span><span style="color:var(--success)">${fmt(income)}</span></div><div style="display:flex;justify-content:space-between;padding-top:4px;font-size:13px;font-weight:600;"><span>Recurring expenses</span><span style="color:var(--danger)">${fmt(expense)}</span></div>`;
 }
@@ -716,7 +670,7 @@ function renderChart(){
 function renderTxList(){
   const ftype=document.getElementById('filter-type').value;
   const fperson=document.getElementById('filter-person').value;
-  let tx=[...monthTx()].sort((a,b)=>txDateTime(b).localeCompare(txDateTime(a)));
+  let tx=[...monthTx()].sort((a,b)=>txSortDate(b).localeCompare(txSortDate(a)));
   if(ftype)tx=tx.filter(t=>t.type===ftype);
   if(fperson)tx=tx.filter(t=>t.person===fperson);
   if(!tx.length){document.getElementById('tx-list').innerHTML='<p class="empty">No transactions found</p>';return;}
@@ -724,7 +678,7 @@ function renderTxList(){
     const idx=transactions.indexOf(t);
     return`<div class="tx-item">
       <div class="tx-dot" style="background:${catColor(t.cat)}"></div>
-      <div class="tx-info"><div class="tx-name">${t.desc}<span class="badge badge-${typeClass(t.type)}">${typeLabel(t.type)}</span></div><div class="tx-meta">${txMeta(t)}</div></div>
+      <div class="tx-info"><div class="tx-name">${t.desc}<span class="badge badge-${typeClass(t.type)}">${typeLabel(t.type)}</span></div><div class="tx-meta">${catLabel(t.cat)} - ${t.person} - ${txDisplayDate(t)}</div></div>
       <span class="tx-amt ${typeClass(t.type)}">${typeSign(t.type)}${fmt(t.amount)}</span>
       ${t.recurring?'<span class="badge badge-expense">Recurring</span>':`<button class="btn-del" onclick="deleteTxRemote(${idx})">Delete</button>`}
     </div>`;
@@ -740,7 +694,7 @@ function renderRecurringInputs(){
       <div class="tx-dot" style="background:${catColor(item.cat)}"></div>
       <div class="tx-info">
         <div class="tx-name">${item.desc}<span class="badge badge-${typeClass(typeFromSheet(item.type||'expense'))}">${typeLabel(typeFromSheet(item.type||'expense'))}</span></div>
-        <div class="tx-meta">${catLabel(item.cat)} - ${item.person||'Recurring'} - ${item.frequency==='weekly'?'Weekly':item.frequency==='biweekly'?'Every 2 weeks':item.frequency==='yearly'?'Yearly':'Monthly'} - starts ${fallbackStartDate(item)}</div>
+        <div class="tx-meta">${catLabel(item.cat)} - ${item.person||'Recurring'} - ${item.frequency==='weekly'?'Weekly':'Monthly'}</div>
       </div>
       <span class="tx-amt ${typeClass(typeFromSheet(item.type||'expense'))}">${typeSign(typeFromSheet(item.type||'expense'))}${fmt(parseFloat(item.amount)||0)}</span>
       <button class="btn-del" onclick="deleteRecurring(${i})">Delete</button>
@@ -790,8 +744,7 @@ document.getElementById('f-date').value=new Date().toISOString().slice(0,10);
 renderAll();
 renderChart();
 syncNow();
-// Auto refresh removed to avoid repeated network permission popups in Preview. Use Refresh button or reopen the app.
-// setInterval(syncNow, 60000);
+setInterval(syncNow, 60000);
 </script>
 </body>
 </html>
