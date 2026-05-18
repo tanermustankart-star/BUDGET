@@ -1249,3 +1249,53 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         <div class="month-nav">
           <button class="btn-sm" data-month="-1" type="button">&lt;</button>
           <span class="month-label" id="ml-recurring"></span>
+          <button class="btn-sm" data-month="1" type="button">&gt;</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Recurring payments</div>
+          <p class="helper">Create salary or expenses from the Add tab. Recurring items are included in monthly totals when their transaction date arrives.</p>
+          <div id="recurring-list"></div>
+        </div>
+      </section>
+
+      <section id="sec-goals" class="section">
+        <div class="card">
+          <div class="card-title">Monthly goals (EUR)</div>
+          <div id="budget-inputs"></div>
+          <button class="btn-primary purple" id="save-goals-btn" type="button">Save goals</button>
+          <div class="msg" id="b-msg"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Goal status</div>
+          <div class="month-nav compact">
+            <button class="btn-sm" data-month="-1" type="button">&lt;</button>
+            <span class="month-label" id="ml-goals"></span>
+            <button class="btn-sm" data-month="1" type="button">&gt;</button>
+          </div>
+          <div id="budget-status"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Categories</div>
+          <div class="form-row">
+            <div>
+              <label for="cat-type">Type</label>
+              <select id="cat-type"></select>
+            </div>
+            <div>
+              <label for="cat-color">Color</label>
+              <input type="color" id="cat-color" value="#5F5E5A">
+            </div>
+          </div>
+          <label for="cat-label">Category label</label>
+          <input type="text" id="cat-label" placeholder="e.g. Internet">
+          <button class="btn-primary" id="add-cat-btn" type="button">Add category</button>
+          <div class="msg" id="cat-msg"></div>
+          <div id="category-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <button class="fab" id="fab-add" type="button">+</button>
+  </div>
+</body>
+</html>
