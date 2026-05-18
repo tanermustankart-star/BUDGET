@@ -238,9 +238,10 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     categories: 'fb_categories',
     pending: 'fb_pendingSync',
     deleted: 'fb_deletedIds',
+    appVersion: 'fb_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.18.3';
+  const APP_VERSION = 'v2026.05.18.4';
 
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
@@ -324,7 +325,16 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     state.categories = mergeDefaultCategories(state.categories);
     state.pendingSync = readJson(KEYS.pending, []);
     state.deletedIds = readJson(KEYS.deleted, []);
+    migrateAppVersion();
     saveState();
+  }
+
+  function migrateAppVersion() {
+    const previous = localStorage.getItem(KEYS.appVersion);
+    if (previous !== APP_VERSION) {
+      localStorage.setItem(KEYS.appVersion, APP_VERSION);
+      state.deletedIds = [];
+    }
   }
 
   function mergeDefaultCategories(saved) {
@@ -456,7 +466,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         const parsed = parseSheetRows(rows).filter(t => !state.deletedIds.includes(t.id));
         const localPendingIds = new Set(state.pendingSync.map(op => op.id).filter(Boolean));
         const pendingLocal = state.transactions.filter(t => localPendingIds.has(t.id));
-        state.transactions = mergeById(parsed, state.transactions, pendingLocal).filter(t => !state.deletedIds.includes(t.id));
+        state.transactions = mergeById(parsed, pendingLocal).filter(t => !state.deletedIds.includes(t.id));
       }
       saveState();
       const detail = `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
@@ -1177,7 +1187,18 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     $('f-date').value = todayIso();
     renderAll();
     syncNow();
-    setInterval(syncNow, 60000);
+    startAutoSync();
+  }
+
+  function startAutoSync() {
+    window.addEventListener('online', syncNow);
+    window.addEventListener('focus', syncNow);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) syncNow();
+    });
+    setInterval(() => {
+      if (!document.hidden) syncNow();
+    }, 20000);
   }
 
   window.addEventListener('DOMContentLoaded', init);
@@ -1190,7 +1211,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     <header class="topbar">
       <div>
         <div class="topbar-title">Sofi & Taner Budget</div>
-        <div class="topbar-subtitle" id="sync-detail">v2026.05.18.3</div>
+        <div class="topbar-subtitle" id="sync-detail">v2026.05.18.4</div>
       </div>
       <div class="sync-pill">
         <div class="sdot spin" id="sdot"></div>
