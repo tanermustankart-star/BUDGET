@@ -583,11 +583,16 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function manualMonthTx(ym = state.currentMonth) {
-    return state.transactions.filter(t => monthOf(t) === ym && !state.deletedIds.includes(t.id));
+    return state.transactions.filter(t => monthOf(t) === ym && !state.deletedIds.includes(t.id) && !isGeneratedRecurringTransaction(t));
   }
 
   function monthTx(ym = state.currentMonth) {
     return [...manualMonthTx(ym), ...recurringForMonth(ym)];
+  }
+
+  function isGeneratedRecurringTransaction(t) {
+    const recurringId = String(t.recurringId || '');
+    return !!recurringId && !recurringId.startsWith('savings_');
   }
 
   function monthName(ym) {
@@ -715,7 +720,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   function renderTxItem(t, options = {}) {
     const c = categoryById(t.cat);
-    const recurring = !!t.recurringId || String(t.id).startsWith('virtual_');
+    const recurring = isGeneratedRecurringTransaction(t) || String(t.id).startsWith('virtual_');
     const canEdit = !options.noActions && !recurring;
     const itemDate = formatEntryDate(t.date);
     const createdText = t.createdAt ? ` - Added ${escapeHtml(shortDateTime(t.createdAt))}` : '';
