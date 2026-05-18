@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.18.4';
+  const APP_VERSION = 'v2026.05.18.5';
 
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
@@ -450,7 +450,9 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       type: tx.type,
       person: tx.person,
       description: tx.desc,
+      desc: tx.desc,
       category: tx.cat,
+      cat: tx.cat,
       amount: tx.amount,
       recurringId: tx.recurringId || (tx.type === 'savings' ? 'savings_' + (tx.savingsSource || 'income') : ''),
     };
@@ -470,7 +472,11 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       }
       saveState();
       const detail = `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
-      setSyncState('ok', 'Synced', detail);
+      if (state.pendingSync.length) {
+        setSyncState('err', 'Sync pending', `${state.pendingSync.length} change(s) not uploaded`);
+      } else {
+        setSyncState('ok', 'Synced', detail);
+      }
     } catch (err) {
       setSyncState('err', 'Offline, changes saved', err.message || '');
     }
@@ -1211,7 +1217,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     <header class="topbar">
       <div>
         <div class="topbar-title">Sofi & Taner Budget</div>
-        <div class="topbar-subtitle" id="sync-detail">v2026.05.18.4</div>
+        <div class="topbar-subtitle" id="sync-detail">v2026.05.18.5</div>
       </div>
       <div class="sync-pill">
         <div class="sdot spin" id="sdot"></div>
