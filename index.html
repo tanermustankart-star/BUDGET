@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Sofi & Taner Budget">
@@ -237,6 +240,8 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     deleted: 'fb_deletedIds',
   };
 
+  const APP_VERSION = 'v2026.05.18.3';
+
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
     { value: 'expense', label: 'Expense' },
@@ -454,7 +459,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         state.transactions = mergeById(parsed, state.transactions, pendingLocal).filter(t => !state.deletedIds.includes(t.id));
       }
       saveState();
-      const detail = `${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
+      const detail = `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
       setSyncState('ok', 'Synced', detail);
     } catch (err) {
       setSyncState('err', 'Offline, changes saved', err.message || '');
@@ -1185,7 +1190,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     <header class="topbar">
       <div>
         <div class="topbar-title">Sofi & Taner Budget</div>
-        <div class="topbar-subtitle" id="sync-detail">Ready</div>
+        <div class="topbar-subtitle" id="sync-detail">v2026.05.18.3</div>
       </div>
       <div class="sync-pill">
         <div class="sdot spin" id="sdot"></div>
