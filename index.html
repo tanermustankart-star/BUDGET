@@ -592,7 +592,16 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   function isGeneratedRecurringTransaction(t) {
     const recurringId = String(t.recurringId || '');
-    return !!recurringId && !recurringId.startsWith('savings_');
+    if (recurringId && !recurringId.startsWith('savings_')) return true;
+    return state.recurring.some(item => {
+      if (!item.active) return false;
+      if (normType(t.type) !== normType(item.type)) return false;
+      if (String(t.cat || '') !== String(item.cat || '')) return false;
+      if (String(t.desc || '').trim().toLowerCase() !== String(item.desc || '').trim().toLowerCase()) return false;
+      if (Math.abs((Number(t.amount) || 0) - (Number(item.amount) || 0)) > 0.009) return false;
+      if (String(t.person || '') && String(item.person || '') && String(t.person || '') !== String(item.person || '')) return false;
+      return recurringDatesInMonth(item, monthOf(t)).includes(String(t.date || '').slice(0, 10));
+    });
   }
 
   function monthName(ym) {
