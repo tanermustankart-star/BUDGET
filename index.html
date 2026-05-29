@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.1';
+  const APP_VERSION = 'v2026.05.29.2';
   const SYNC_ID_RE = /\s*\[\[fbid:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbdelete:([^\]]+)\]\]$/;
 
@@ -582,9 +582,18 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         tx.id = decoded.id;
         tx.desc = decoded.desc;
       }
-      if (tx.amount > 0 && tx.desc && !deletedIds.has(tx.id)) byId.set(tx.id, tx);
+      if (tx.amount > 0 && !deletedIds.has(tx.id)) {
+        if (!tx.desc) tx.desc = fallbackSheetDescription(tx);
+        byId.set(tx.id, tx);
+      }
     });
     return Array.from(byId.values()).filter(t => !deletedIds.has(t.id));
+  }
+
+  function fallbackSheetDescription(tx) {
+    const cat = categoryLabel(tx.cat);
+    if (cat && cat !== 'Other') return cat;
+    return typeLabel(tx.type);
   }
 
   function legacyId(row) {
