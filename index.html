@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.7-sync-fix';
+  const APP_VERSION = 'v2026.05.29.8-mobile-delete-fix';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -542,12 +542,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     // Collect latest meta row per type from sheet rows (by row index = last-write-wins)
     const latest = {};
     rows.forEach((row, rowIndex) => {
-      let desc = '';
-      if (Array.isArray(row)) {
-        desc = String(row[6] || '');
-      } else if (row && typeof row === 'object') {
-        desc = String(row.description || row.Description || row.desc || '');
-      }
+      const desc = sheetRowDescription(row);
       const meta = decodeMetaRow(desc);
       if (!meta) return;
       const tsRaw = Array.isArray(row) ? row[1] : (row.createdAt || row.CreatedAt || '');
@@ -641,7 +636,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const deletedIds = new Set();
     rows.slice(start).forEach((row) => {
       // Skip meta rows
-      const descField = String(row[6] || '');
+      const descField = sheetRowDescription(row);
       if (META_ROW_RE.test(descField)) return;
 
       const looksLikeNewRow = /^\d{4}-\d{2}$/.test(String(row[2] || '')) && String(row[3] || '').length >= 8;
@@ -692,11 +687,19 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const hasOldHeader = ['date','kayit tarihi'].includes(String(first[0] || '').toLowerCase());
     const start = (hasNewHeader || hasOldHeader) ? 1 : 0;
     rows.slice(start).forEach(row => {
-      const descField = String(row[6] || '');
+      const descField = sheetRowDescription(row);
       const m = descField.match(SYNC_DELETE_RE);
       if (m && m[1]) ids.push(m[1]);
     });
     return ids;
+  }
+
+  function sheetRowDescription(row) {
+    if (Array.isArray(row)) return String(row[6] || row[3] || '');
+    if (row && typeof row === 'object') {
+      return String(row.description || row.Description || row.desc || row.Desc || '');
+    }
+    return '';
   }
 
   function fallbackSheetDescription(tx) {
@@ -1470,7 +1473,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     <header class="topbar">
       <div>
         <div class="topbar-title">Sofi & Taner Budget</div>
-        <div class="topbar-subtitle" id="sync-detail">v2026.05.29.7-sync-fix</div>
+        <div class="topbar-subtitle" id="sync-detail">v2026.05.29.8-mobile-delete-fix</div>
       </div>
       <div class="sync-pill">
         <div class="sdot spin" id="sdot"></div>
