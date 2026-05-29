@@ -232,18 +232,18 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   'use strict';
 
   const KEYS = {
-    transactions: 'fb_transactions',
-    budgets: 'fb_budgets',
-    recurring: 'fb_recurring',
-    categories: 'fb_categories',
-    pending: 'fb_pendingSync',
-    deleted: 'fb_deletedIds',
-    appVersion: 'fb_appVersion',
+    transactions: 'fb_clean_transactions',
+    budgets: 'fb_clean_budgets',
+    recurring: 'fb_clean_recurring',
+    categories: 'fb_clean_categories',
+    pending: 'fb_clean_pendingSync',
+    deleted: 'fb_clean_deletedIds',
+    appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.4';
-  const SYNC_ID_RE = /\s*\[\[fbid:([^\]]+)\]\]\s*$/;
-  const SYNC_DELETE_RE = /^\[\[fbdelete:([^\]]+)\]\]$/;
+  const APP_VERSION = 'v2026.05.29.5-clean';
+  const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
+  const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
 
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
@@ -304,17 +304,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function migrateOldStorage() {
-    if (!localStorage.getItem(KEYS.transactions)) {
-      const oldTx = readJson('fb_tx', []);
-      if (Array.isArray(oldTx) && oldTx.length) {
-        state.transactions = oldTx.map(t => normalizeTransaction({ ...t, id: t.id || uuid() }));
-      }
-    }
-    if (!localStorage.getItem(KEYS.budgets)) state.budgets = readJson('fb_bud', {});
-    if (!localStorage.getItem(KEYS.recurring)) {
-      const oldRec = readJson('fb_rec', []);
-      state.recurring = Array.isArray(oldRec) ? oldRec.map(r => normalizeRecurring(r)) : [];
-    }
+    // Clean slate release: do not import previous local data or old sync queues.
   }
 
   function loadState() {
@@ -465,7 +455,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   function encodeSyncDescription(desc, id) {
     const decoded = decodeSyncDescription(desc);
-    return `${decoded.desc || String(desc || '').trim()} [[fbid:${id}]]`.trim();
+    return `${decoded.desc || String(desc || '').trim()} [[fbclean:${id}]]`.trim();
   }
 
   function decodeSyncDescription(value) {
@@ -481,7 +471,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function deleteTombstoneToSync(id) {
-    const marker = `[[fbdelete:${id}]]`;
+    const marker = `[[fbcleandel:${id}]]`;
     return {
       id: `delete_${id}_${Date.now()}`,
       createdAt: nowLocal(),
@@ -575,11 +565,11 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       }
       const decoded = decodeSyncDescription(tx.desc);
       if (decoded.deleted && decoded.id) {
-        if (String(decoded.id).startsWith('legacy_')) return;
         deletedIds.add(decoded.id);
         byId.delete(decoded.id);
         return;
       }
+      if (!decoded.id) return;
       if (decoded.id) {
         tx.id = decoded.id;
         tx.desc = decoded.desc;
