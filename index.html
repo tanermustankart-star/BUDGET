@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.8-mobile-delete-fix';
+  const APP_VERSION = 'v2026.05.29.9-entry-guard';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -1136,6 +1136,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   async function saveEntry() {
     const button = $('save-entry-btn');
     button.disabled = true;
+    try {
     const tx = normalizeTransaction({
       id: state.editingId || uuid(),
       createdAt: state.editingId ? (state.transactions.find(t => t.id === state.editingId)?.createdAt || nowLocal()) : nowLocal(),
@@ -1201,7 +1202,13 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     renderAll();
     clearEntryForm();
     await syncNow();
-    button.disabled = false;
+    } catch (err) {
+      $('f-msg').style.color = 'var(--danger)';
+      $('f-msg').textContent = 'Save failed: ' + (err && err.message ? err.message : 'Unknown error');
+      console.error('Save entry failed:', err);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function resetTransactionFilters() {
