@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.3';
+  const APP_VERSION = 'v2026.05.29.4';
   const SYNC_ID_RE = /\s*\[\[fbid:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbdelete:([^\]]+)\]\]$/;
 
@@ -430,6 +430,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     if (operation.action === 'add' || operation.action === 'update') {
       return BudgetSync.addTransaction(transactionToSync(normalizeTransaction(operation.tx || {})));
     }
+    if (operation.action === 'delete' && String(operation.id || '').startsWith('legacy_')) return { ok: true };
     if (operation.action === 'delete') return BudgetSync.addTransaction(deleteTombstoneToSync(operation.id));
   }
 
@@ -574,6 +575,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       }
       const decoded = decodeSyncDescription(tx.desc);
       if (decoded.deleted && decoded.id) {
+        if (String(decoded.id).startsWith('legacy_')) return;
         deletedIds.add(decoded.id);
         byId.delete(decoded.id);
         return;
