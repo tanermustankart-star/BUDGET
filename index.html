@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.10-local-preserve';
+  const APP_VERSION = 'v2026.05.29.11-keep-local-entries';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -579,7 +579,6 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   async function syncNow() {
     setSyncState('spin', 'Syncing...', state.pendingSync.length ? `${state.pendingSync.length} pending change(s)` : '');
     try {
-      const pendingIdsBeforeFlush = new Set(state.pendingSync.map(op => op.id).filter(Boolean));
       const localBeforeSync = state.transactions.slice();
       await flushPendingSync();
       const data = await BudgetSync.getAll();
@@ -591,10 +590,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         // Collect delete tombstones from sheet and merge into local deletedIds
         const sheetDeletedIds = collectDeletedIdsFromRows(rows);
         sheetDeletedIds.forEach(id => { if (!state.deletedIds.includes(id)) state.deletedIds.push(id); });
-        const localPendingIds = new Set(state.pendingSync.map(op => op.id).filter(Boolean));
-        pendingIdsBeforeFlush.forEach(id => localPendingIds.add(id));
-        const pendingLocal = localBeforeSync.filter(t => localPendingIds.has(t.id));
-        state.transactions = mergeById(parsed, pendingLocal).filter(t => !state.deletedIds.includes(t.id));
+        state.transactions = mergeById(parsed, localBeforeSync).filter(t => !state.deletedIds.includes(t.id));
       }
       saveState();
       const detail = `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
