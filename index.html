@@ -110,7 +110,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 (function(){
   'use strict';
 
-  const GS_URL = 'https://script.google.com/macros/s/AKfycby7mfRxjZH-KXpCXrl-olIWorMnhD4kXiulzKpY_B-m-qJCc6qgvhe3dLsnVa_fsnC1/exec';
+  const GS_URL = 'https://script.google.com/macros/s/AKfycbw--DNIl6ChTOabg-iE7Nd6OH6tRc8Q1gPWdmuvsfhyXcdwhbGSM5i4wGKA4VlL0zmx/exec';
 
   function toParams(operation) {
     const params = new URLSearchParams();
@@ -241,9 +241,10 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.5-clean';
+  const APP_VERSION = 'v2026.05.29.7-sync-fix';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
+  const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
 
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
@@ -488,6 +489,98 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     };
   }
 
+  // ── Meta sync: recurring, budgets, categories ─────────────────────
+  function encodeMetaRow(type, data) {
+    const json = JSON.stringify(data);
+    const b64 = btoa(unescape(encodeURIComponent(json)));
+    const marker = `[[fbmeta:${type}:${b64}]]`;
+    const ts = Date.now();
+    const id = `meta_${type}_${ts}`;
+    return {
+      id,
+      createdAt: nowLocal(),
+      month: state.currentMonth,
+      date: todayIso(),
+      type: 'expense',
+      person: 'System',
+      description: marker,
+      desc: marker,
+      category: 'other',
+      cat: 'other',
+      amount: 0.01,
+      recurringId: '',
+    };
+  }
+
+  function decodeMetaRow(description) {
+    const m = String(description || '').match(META_ROW_RE);
+    if (!m) return null;
+    try {
+      const json = decodeURIComponent(escape(atob(m[2])));
+      return { type: m[1], data: JSON.parse(json) };
+    } catch (e) { return null; }
+  }
+
+  async function pushMetaToSheets(type, data) {
+    const row = encodeMetaRow(type, data);
+    try { await BudgetSync.addTransaction(row); } catch (e) { /* offline ok */ }
+  }
+
+  function parseRowTimestamp(tsRaw) {
+    const s = String(tsRaw || '').trim();
+    if (!s) return 0;
+    // Try direct parse first
+    let t = new Date(s).getTime();
+    if (t > 0) return t;
+    // "YYYY-MM-DD HH:MM:SS" → replace space with T
+    t = new Date(s.replace(' ', 'T')).getTime();
+    if (t > 0) return t;
+    return 0;
+  }
+
+  function applyMetaFromSheet(rows) {
+    // Collect latest meta row per type from sheet rows (by row index = last-write-wins)
+    const latest = {};
+    rows.forEach((row, rowIndex) => {
+      let desc = '';
+      if (Array.isArray(row)) {
+        desc = String(row[6] || '');
+      } else if (row && typeof row === 'object') {
+        desc = String(row.description || row.Description || row.desc || '');
+      }
+      const meta = decodeMetaRow(desc);
+      if (!meta) return;
+      const tsRaw = Array.isArray(row) ? row[1] : (row.createdAt || row.CreatedAt || '');
+      // Use parsed timestamp; fall back to row index so later rows always win when timestamps are equal/missing
+      const rowTs = parseRowTimestamp(tsRaw) || rowIndex;
+      if (!latest[meta.type] || rowTs >= latest[meta.type].ts) {
+        latest[meta.type] = { ts: rowTs, data: meta.data };
+      }
+    });
+
+    // Always apply remote meta when present — remote is source of truth across devices.
+    // Only skip if remote has no data AND we already have local data (avoids wiping on empty sheet).
+    if (latest.recurring) {
+      const parsed = (latest.recurring.data || []).map(normalizeRecurring);
+      if (parsed.length > 0 || state.recurring.length === 0) {
+        state.recurring = parsed;
+      }
+    }
+    if (latest.budgets) {
+      const remoteBudgets = latest.budgets.data || {};
+      if (Object.keys(remoteBudgets).length > 0 || Object.keys(state.budgets).length === 0) {
+        state.budgets = remoteBudgets;
+      }
+    }
+    if (latest.categories) {
+      const remoteCats = latest.categories.data || [];
+      if (remoteCats.length > 0) {
+        state.categories = mergeDefaultCategories(remoteCats);
+      }
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────
+
   async function syncNow() {
     setSyncState('spin', 'Syncing...', state.pendingSync.length ? `${state.pendingSync.length} pending change(s)` : '');
     try {
@@ -495,7 +588,12 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       const data = await BudgetSync.getAll();
       const rows = extractSheetRows(data);
       if (rows.length) {
+        // Apply meta (recurring/budgets/categories) from sheet BEFORE filtering
+        applyMetaFromSheet(rows);
         const parsed = parseSheetRows(rows).filter(t => !state.deletedIds.includes(t.id));
+        // Collect delete tombstones from sheet and merge into local deletedIds
+        const sheetDeletedIds = collectDeletedIdsFromRows(rows);
+        sheetDeletedIds.forEach(id => { if (!state.deletedIds.includes(id)) state.deletedIds.push(id); });
         const localPendingIds = new Set(state.pendingSync.map(op => op.id).filter(Boolean));
         const pendingLocal = state.transactions.filter(t => localPendingIds.has(t.id));
         state.transactions = mergeById(parsed, pendingLocal).filter(t => !state.deletedIds.includes(t.id));
@@ -542,6 +640,10 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const byId = new Map();
     const deletedIds = new Set();
     rows.slice(start).forEach((row) => {
+      // Skip meta rows
+      const descField = String(row[6] || '');
+      if (META_ROW_RE.test(descField)) return;
+
       const looksLikeNewRow = /^\d{4}-\d{2}$/.test(String(row[2] || '')) && String(row[3] || '').length >= 8;
       const looksLikeSevenColumnLegacy = /^\d{4}-\d{2}$/.test(String(row[1] || '')) && ['income','expense','savings','gelir','gider','birikim'].includes(String(row[2] || '').toLowerCase());
       let tx;
@@ -580,6 +682,21 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       }
     });
     return Array.from(byId.values()).filter(t => !deletedIds.has(t.id));
+  }
+
+  function collectDeletedIdsFromRows(rows) {
+    const ids = [];
+    const first = rows[0] || [];
+    const header = first.map(v => String(v || '').toLowerCase());
+    const hasNewHeader = header[0] === 'id';
+    const hasOldHeader = ['date','kayit tarihi'].includes(String(first[0] || '').toLowerCase());
+    const start = (hasNewHeader || hasOldHeader) ? 1 : 0;
+    rows.slice(start).forEach(row => {
+      const descField = String(row[6] || '');
+      const m = descField.match(SYNC_DELETE_RE);
+      if (m && m[1]) ids.push(m[1]);
+    });
+    return ids;
   }
 
   function fallbackSheetDescription(tx) {
@@ -1025,7 +1142,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       person: $('f-person').value,
       description: $('f-desc').value.trim(),
       category: $('f-cat').value,
-      amount: Number($('f-amount').value),
+      amount: Number(String($('f-amount').value).replace(',', '.')),
       savingsSource: $('f-type').value === 'savings' ? $('f-savings-source').value : '',
     });
     const error = validateEntry({ date: tx.date, desc: tx.desc, amount: tx.amount });
@@ -1063,6 +1180,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       $('f-msg').textContent = salaryRecurring ? 'Recurring salary saved.' : 'Monthly recurring expense saved.';
       renderAll();
       button.disabled = false;
+      pushMetaToSheets('recurring', state.recurring);
       return;
     }
 
@@ -1125,7 +1243,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   async function deleteTransaction(id) {
-    if (!confirm('Delete this entry?')) return;
+    if (!await modalConfirm('Delete this entry?')) return;
     state.transactions = state.transactions.filter(t => t.id !== id);
     if (!state.deletedIds.includes(id)) state.deletedIds.push(id);
     queueSync({ action:'delete', id });
@@ -1134,20 +1252,24 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     await syncNow();
   }
 
-  function editRecurring(id) {
+  async function editRecurring(id) {
     const item = state.recurring.find(r => r.id === id);
     if (!item) return;
-    const desc = prompt('Description', item.desc);
+    const desc = await modalPrompt('Description', item.desc);
     if (desc === null) return;
-    const amount = Number(prompt('Amount', item.amount));
-    if (!Number.isFinite(amount) || amount <= 0) return alert('Amount must be positive.');
-    const frequency = prompt('Frequency: monthly, weekly, biweekly, yearly', item.frequency);
-    if (!['monthly','weekly','biweekly','yearly'].includes(frequency)) return alert('Invalid frequency.');
+    const amountStr = await modalPrompt('Amount', item.amount);
+    if (amountStr === null) return;
+    const amount = Number(amountStr);
+    if (!Number.isFinite(amount) || amount <= 0) { await modalAlert('Amount must be positive.'); return; }
+    const frequency = await modalPrompt('Frequency: monthly, weekly, biweekly, yearly', item.frequency);
+    if (frequency === null) return;
+    if (!['monthly','weekly','biweekly','yearly'].includes(frequency)) { await modalAlert('Invalid frequency.'); return; }
     item.desc = desc.trim();
     item.amount = amount;
     item.frequency = frequency;
     saveState();
     renderAll();
+    pushMetaToSheets('recurring', state.recurring);
   }
 
   function toggleRecurring(id) {
@@ -1156,13 +1278,15 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     item.active = !item.active;
     saveState();
     renderAll();
+    pushMetaToSheets('recurring', state.recurring);
   }
 
-  function deleteRecurring(id) {
-    if (!confirm('Delete this recurring payment?')) return;
+  async function deleteRecurring(id) {
+    if (!await modalConfirm('Delete this recurring payment?')) return;
     state.recurring = state.recurring.filter(r => r.id !== id);
     saveState();
     renderAll();
+    pushMetaToSheets('recurring', state.recurring);
   }
 
   function saveBudgets() {
@@ -1172,8 +1296,12 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       else delete state.budgets[c.id];
     });
     saveState();
-    $('b-msg').textContent = 'Goals saved.';
+    $('b-msg').textContent = 'Goals saved & syncing...';
     renderAll();
+    pushMetaToSheets('budgets', state.budgets).then(() => {
+      $('b-msg').textContent = 'Goals saved.';
+      
+    });
   }
 
   function addCategory() {
@@ -1185,6 +1313,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     $('cat-label').value = '';
     saveState();
     renderAll();
+    pushMetaToSheets('categories', state.categories);
   }
 
   function deleteCategory(id) {
@@ -1192,6 +1321,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     state.categories = state.categories.filter(c => c.id !== id);
     saveState();
     renderAll();
+    pushMetaToSheets('categories', state.categories);
   }
 
   function navTo(section) {
@@ -1203,6 +1333,63 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+
+  // Custom modal helpers — replaces confirm() and prompt() which fail in iOS PWA mode
+  function showModal(html, buttons) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--bg);border-radius:var(--radius-lg);padding:20px;width:100%;max-width:320px;font-family:inherit;';
+      box.innerHTML = html + '<div style="display:flex;gap:8px;margin-top:16px;">' +
+        buttons.map((b,i) => `<button data-idx="${i}" style="flex:1;padding:11px;border-radius:var(--radius);border:0.5px solid var(--border);background:${b.primary?'#1D9E75':'var(--bg2)'};color:${b.primary?'#fff':'var(--text)'};font-size:14px;font-family:inherit;cursor:pointer;">${escapeHtml(b.label)}</button>`).join('') +
+        '</div>';
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', e => {
+        const btn = e.target.closest('[data-idx]');
+        if (!btn) return;
+        document.body.removeChild(overlay);
+        resolve(buttons[Number(btn.dataset.idx)].value);
+      });
+    });
+  }
+
+  function modalConfirm(message) {
+    return showModal(`<p style="font-size:15px;line-height:1.45;">${escapeHtml(message)}</p>`, [
+      { label: 'Cancel', value: false },
+      { label: 'Delete', value: true, primary: true },
+    ]);
+  }
+
+  function modalPrompt(message, defaultValue) {
+    return new Promise(resolve => {
+      const inputId = 'modal-input-' + Date.now();
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--bg);border-radius:var(--radius-lg);padding:20px;width:100%;max-width:320px;font-family:inherit;';
+      box.innerHTML = `<p style="font-size:14px;color:var(--text2);margin-bottom:8px;">${escapeHtml(message)}</p>
+        <input id="${inputId}" value="${escapeHtml(String(defaultValue||''))}" style="width:100%;padding:10px 12px;border:0.5px solid var(--border2);border-radius:var(--radius);background:var(--bg2);color:var(--text);font-size:15px;font-family:inherit;">
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button data-cancel style="flex:1;padding:11px;border-radius:var(--radius);border:0.5px solid var(--border);background:var(--bg2);color:var(--text);font-size:14px;font-family:inherit;cursor:pointer;">Cancel</button>
+          <button data-ok style="flex:1;padding:11px;border-radius:var(--radius);border:none;background:#1D9E75;color:#fff;font-size:14px;font-family:inherit;cursor:pointer;">OK</button>
+        </div>`;
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      const input = box.querySelector('#' + inputId);
+      setTimeout(() => input.focus(), 80);
+      box.querySelector('[data-cancel]').addEventListener('click', () => { document.body.removeChild(overlay); resolve(null); });
+      box.querySelector('[data-ok]').addEventListener('click', () => { document.body.removeChild(overlay); resolve(input.value); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { document.body.removeChild(overlay); resolve(input.value); } });
+    });
+  }
+
+  function modalAlert(message) {
+    return showModal(`<p style="font-size:15px;line-height:1.45;">${escapeHtml(message)}</p>`, [
+      { label: 'OK', value: true, primary: true },
+    ]);
   }
 
   function bindEvents() {
@@ -1242,12 +1429,23 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     });
   }
 
-  function init() {
+  function isFirstVisit() {
+    // If no transactions and no pending sync, this is likely a fresh device
+    return state.transactions.length === 0 && state.pendingSync.length === 0;
+  }
+
+  async function init() {
     loadState();
     bindEvents();
     $('f-date').value = todayIso();
     renderAll();
-    syncNow();
+    // On a fresh device (no local data), show loading state and wait for sync
+    if (isFirstVisit()) {
+      setSyncState('spin', 'Loading data...', 'Fetching from cloud...');
+    }
+    await syncNow();
+    // Re-render after sync so cloud data is shown immediately
+    renderAll();
     startAutoSync();
   }
 
@@ -1262,7 +1460,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     }, 20000);
   }
 
-  window.addEventListener('DOMContentLoaded', init);
+  window.addEventListener('DOMContentLoaded', () => init().catch(err => console.error('Init error:', err)));
 })();
 
   </script>
@@ -1272,7 +1470,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     <header class="topbar">
       <div>
         <div class="topbar-title">Sofi & Taner Budget</div>
-        <div class="topbar-subtitle" id="sync-detail">v2026.05.18.5</div>
+        <div class="topbar-subtitle" id="sync-detail">v2026.05.29.7-sync-fix</div>
       </div>
       <div class="sync-pill">
         <div class="sdot spin" id="sdot"></div>
@@ -1341,7 +1539,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
           <label for="f-desc">Description</label>
           <input type="text" id="f-desc" placeholder="Groceries, salary, ChatGPT...">
           <label for="f-amount">Amount (EUR)</label>
-          <input type="number" id="f-amount" placeholder="0.00" min="0" step="0.01" inputmode="decimal">
+          <input type="text" id="f-amount" placeholder="0.00" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*">
           <div class="form-row">
             <div>
               <label for="f-cat">Category</label>
