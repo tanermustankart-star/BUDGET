@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.12-parse-google-dates';
+  const APP_VERSION = 'v2026.05.29.13-apply-empty-meta';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -567,9 +567,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     // Only skip if remote has no data AND we already have local data (avoids wiping on empty sheet).
     if (latest.recurring) {
       const parsed = (latest.recurring.data || []).map(normalizeRecurring);
-      if (parsed.length > 0 || state.recurring.length === 0) {
-        state.recurring = parsed;
-      }
+      state.recurring = parsed;
     }
     if (latest.budgets) {
       const remoteBudgets = latest.budgets.data || {};
