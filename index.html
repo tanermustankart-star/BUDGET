@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.11-keep-local-entries';
+  const APP_VERSION = 'v2026.05.29.12-parse-google-dates';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -348,11 +348,15 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   function normalizeTransaction(t) {
     const amount = Number(t.amount);
+    const rawDate = String(t.date || t.Date || todayIso());
+    const date = normalizeSheetDate(rawDate);
+    const rawMonth = String(t.month || t.Month || '');
+    const month = /^\d{4}-\d{2}$/.test(rawMonth) ? rawMonth : date.slice(0, 7);
     return {
       id: String(t.id || t.ID || uuid()),
       createdAt: String(t.createdAt || t.CreatedAt || nowLocal()),
-      month: String(t.month || t.Month || String(t.date || t.Date || todayIso()).slice(0, 7)),
-      date: String(t.date || t.Date || todayIso()),
+      month,
+      date,
       type: normType(t.type || t.Type),
       person: String(t.person || t.Person || ''),
       desc: String(t.desc || t.description || t.Description || '').trim(),
@@ -362,6 +366,12 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       savingsSource: String(t.savingsSource || '').trim() || savingsSourceFromRecurringId(t.type || t.Type, t.recurringId || t.RecurringId),
       pending: !!t.pending,
     };
+  }
+
+  function normalizeSheetDate(value) {
+    const text = String(value || '').trim();
+    const match = text.match(/\d{4}-\d{2}-\d{2}/);
+    return match ? match[0] : todayIso();
   }
 
   function savingsSourceFromRecurringId(type, recurringId) {
@@ -638,7 +648,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       const descField = sheetRowDescription(row);
       if (META_ROW_RE.test(descField)) return;
 
-      const looksLikeNewRow = /^\d{4}-\d{2}$/.test(String(row[2] || '')) && String(row[3] || '').length >= 8;
+      const looksLikeNewRow = String(row[0] || '').toLowerCase() !== 'id' && String(row[6] || '').includes('[[fbclean:');
       const looksLikeSevenColumnLegacy = /^\d{4}-\d{2}$/.test(String(row[1] || '')) && ['income','expense','savings','gelir','gider','birikim'].includes(String(row[2] || '').toLowerCase());
       let tx;
       if ((hasNewHeader || row.length >= 10) && looksLikeNewRow) {
