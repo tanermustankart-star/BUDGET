@@ -241,7 +241,9 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.18.5';
+  const APP_VERSION = 'v2026.05.29.1';
+  const SYNC_ID_RE = /\s*\[\[fbid:([^\]]+)\]\]\s*$/;
+  const SYNC_DELETE_RE = /^\[\[fbdelete:([^\]]+)\]\]$/;
 
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
@@ -425,9 +427,10 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   async function runSyncOperation(operation) {
-    if (operation.action === 'add') return BudgetSync.addTransaction(operation.tx);
-    if (operation.action === 'update') return BudgetSync.updateTransaction(operation.tx);
-    if (operation.action === 'delete') return BudgetSync.deleteTransaction(operation.id);
+    if (operation.action === 'add' || operation.action === 'update') {
+      return BudgetSync.addTransaction(transactionToSync(normalizeTransaction(operation.tx || {})));
+    }
+    if (operation.action === 'delete') return BudgetSync.addTransaction(deleteTombstoneToSync(operation.id));
   }
 
   async function flushPendingSync() {
@@ -442,6 +445,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function transactionToSync(tx) {
+    const description = encodeSyncDescription(tx.desc, tx.id);
     return {
       id: tx.id,
       createdAt: tx.createdAt,
@@ -449,12 +453,47 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       date: tx.date,
       type: tx.type,
       person: tx.person,
-      description: tx.desc,
-      desc: tx.desc,
+      description,
+      desc: description,
       category: tx.cat,
       cat: tx.cat,
       amount: tx.amount,
       recurringId: tx.recurringId || (tx.type === 'savings' ? 'savings_' + (tx.savingsSource || 'income') : ''),
+    };
+  }
+
+  function encodeSyncDescription(desc, id) {
+    const decoded = decodeSyncDescription(desc);
+    return `${decoded.desc || String(desc || '').trim()} [[fbid:${id}]]`.trim();
+  }
+
+  function decodeSyncDescription(value) {
+    const text = String(value || '').trim();
+    const deleted = text.match(SYNC_DELETE_RE);
+    if (deleted) return { desc: '', id: deleted[1], deleted: true };
+    const tagged = text.match(SYNC_ID_RE);
+    return {
+      desc: text.replace(SYNC_ID_RE, '').trim(),
+      id: tagged ? tagged[1] : '',
+      deleted: false,
+    };
+  }
+
+  function deleteTombstoneToSync(id) {
+    const marker = `[[fbdelete:${id}]]`;
+    return {
+      id: `delete_${id}_${Date.now()}`,
+      createdAt: nowLocal(),
+      month: state.currentMonth,
+      date: todayIso(),
+      type: 'expense',
+      person: 'System',
+      description: marker,
+      desc: marker,
+      category: 'other',
+      cat: 'other',
+      amount: 0.01,
+      recurringId: '',
     };
   }
 
@@ -509,28 +548,43 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const hasNewHeader = header[0] === 'id';
     const hasOldHeader = ['date','kayit tarihi'].includes(String(first[0] || '').toLowerCase());
     const start = (hasNewHeader || hasOldHeader) ? 1 : 0;
-    return rows.slice(start).map((row) => {
+    const byId = new Map();
+    const deletedIds = new Set();
+    rows.slice(start).forEach((row) => {
       const looksLikeNewRow = /^\d{4}-\d{2}$/.test(String(row[2] || '')) && String(row[3] || '').length >= 8;
       const looksLikeSevenColumnLegacy = /^\d{4}-\d{2}$/.test(String(row[1] || '')) && ['income','expense','savings','gelir','gider','birikim'].includes(String(row[2] || '').toLowerCase());
+      let tx;
       if ((hasNewHeader || row.length >= 10) && looksLikeNewRow) {
-        return normalizeTransaction({
+        tx = normalizeTransaction({
           id: row[0], createdAt: row[1], month: row[2], date: row[3],
           type: row[4], person: row[5], description: row[6],
           category: row[7], amount: row[8], recurringId: row[9],
         });
-      }
-      if (looksLikeSevenColumnLegacy) {
-        return normalizeTransaction({
+      } else if (looksLikeSevenColumnLegacy) {
+        tx = normalizeTransaction({
           id: legacyId(row), createdAt: row[0], month: row[1], date: String(row[0] || '').slice(0, 10),
           type: row[2], person: row[3], description: row[4],
           category: row[5], amount: row[6],
         });
+      } else {
+        tx = normalizeTransaction({
+          id: legacyId(row), date: row[0], type: row[1], person: row[2],
+          description: row[3], category: row[4], amount: row[5],
+        });
       }
-      return normalizeTransaction({
-        id: legacyId(row), date: row[0], type: row[1], person: row[2],
-        description: row[3], category: row[4], amount: row[5],
-      });
-    }).filter(t => t.amount > 0 && t.desc);
+      const decoded = decodeSyncDescription(tx.desc);
+      if (decoded.deleted && decoded.id) {
+        deletedIds.add(decoded.id);
+        byId.delete(decoded.id);
+        return;
+      }
+      if (decoded.id) {
+        tx.id = decoded.id;
+        tx.desc = decoded.desc;
+      }
+      if (tx.amount > 0 && tx.desc && !deletedIds.has(tx.id)) byId.set(tx.id, tx);
+    });
+    return Array.from(byId.values()).filter(t => !deletedIds.has(t.id));
   }
 
   function legacyId(row) {
