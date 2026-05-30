@@ -62,18 +62,28 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 .btn-primary { width: 100%; padding: 13px; border-radius: var(--radius); border: none; background: #1D9E75; color: white; font-size: 15px; font-weight: 650; cursor: pointer; font-family: inherit; margin-top: 4px; }
 .btn-primary:disabled, .btn-sm:disabled { opacity: .55; cursor: not-allowed; }
 .btn-primary.purple { background: var(--purple); }
-.tx-item { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 0.5px solid var(--border); }
+.tx-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 0.5px solid var(--border); }
 .tx-item:last-child { border-bottom: none; }
 .tx-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .tx-info { flex: 1; min-width: 0; }
-.tx-name { font-size: 14px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tx-name { font-size: 14px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
 .tx-meta { font-size: 11px; color: var(--text2); margin-top: 2px; line-height: 1.35; }
 .tx-date { font-size: 11px; color: var(--text); margin-top: 3px; line-height: 1.35; font-weight: 600; }
-.tx-amt { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.tx-amt { font-size: 14px; font-weight: 750; white-space: nowrap; text-align: right; }
 .tx-amt.income { color: var(--success); } .tx-amt.expense { color: var(--danger); } .tx-amt.savings { color: var(--info); }
-.tx-actions { display: flex; gap: 4px; }
+.tx-actions { display: flex; gap: 6px; grid-column: 2 / -1; justify-content: flex-end; }
 .btn-del, .btn-edit { border: none; background: var(--bg2); color: var(--text2); cursor: pointer; padding: 6px 8px; border-radius: 8px; font-size: 12px; font-family: inherit; }
 .btn-del { color: var(--danger); }
+.recurring-item { grid-template-columns: 10px minmax(0, 1fr); align-items: start; gap: 12px; padding: 16px 0; }
+.recurring-item .tx-dot { margin-top: 24px; }
+.recurring-item .tx-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; align-items: start; min-width: 0; }
+.recurring-item .tx-info { min-width: 0; }
+.recurring-item .tx-name { font-size: 15px; letter-spacing: .01em; text-transform: none; }
+.recurring-item .tx-meta { font-size: 12px; margin-top: 5px; }
+.recurring-item .tx-date { display: inline-flex; width: auto; margin-top: 9px; padding: 5px 8px; border-radius: 8px; background: var(--bg2); color: var(--text2); font-size: 11px; font-weight: 650; }
+.recurring-item .tx-amt { font-size: 15px; padding-top: 1px; }
+.recurring-item .tx-actions { grid-column: 1 / -1; justify-content: flex-start; padding-top: 2px; }
+.recurring-item .btn-edit, .recurring-item .btn-del { min-width: 70px; padding: 8px 10px; font-size: 12px; }
 .prog-bg { background: var(--bg2); border-radius: 4px; height: 7px; margin-top: 5px; overflow: hidden; }
 .prog-fill { height: 7px; border-radius: 4px; }
 .empty { text-align: center; color: var(--text3); padding: 24px 0; font-size: 14px; line-height: 1.45; }
@@ -103,6 +113,20 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 @media (min-width: 700px) {
   .nav { top: 0; bottom: auto; border-top: none; border-bottom: 0.5px solid var(--border); padding: 12px 16px; }
   .app { padding-bottom: 0; }
+}
+@media (max-width: 420px) {
+  .topbar { align-items: flex-start; }
+  .topbar-title { font-size: 17px; }
+  .topbar-subtitle { max-width: 220px; line-height: 1.25; }
+  .sync-pill { flex-shrink: 0; }
+  .section { padding: 14px 12px; }
+  .card { padding: 14px 12px; }
+  .tx-item { grid-template-columns: 10px minmax(0, 1fr); align-items: start; }
+  .tx-amt { grid-column: 2; justify-self: start; margin-top: 5px; text-align: left; }
+  .tx-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
+  .recurring-item .tx-main { grid-template-columns: minmax(0, 1fr); }
+  .recurring-item .tx-amt { grid-column: 1; justify-self: start; margin-top: 0; }
+  .recurring-item .tx-actions { gap: 8px; }
 }
 
   </style>
@@ -241,7 +265,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.7-sync-stability';
+  const APP_VERSION = 'v2026.05.30.9-polished-recurring-ui';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -716,11 +740,10 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         }
       }
       saveState();
-      const detail = pull
-        ? `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`
-        : `${APP_VERSION} - saved - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
+      const syncTime = new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+      const detail = pull ? `Updated ${syncTime}` : `Saved ${syncTime}`;
       if (state.pendingSync.length) {
-        setSyncState('err', 'Sync pending', `${state.pendingSync.length} change(s) not uploaded`);
+        setSyncState('err', 'Sync pending', `Saving ${state.pendingSync.length} change(s)...`);
       } else {
         setSyncState('ok', 'Synced', detail);
       }
@@ -1166,18 +1189,20 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       const c = categoryById(item.cat);
       const dueDates = recurringDatesInMonth(item, state.currentMonth);
       const nextText = dueDates.length ? `Transaction date: ${formatEntryDate(dueDates[0])}` : `Starts: ${formatEntryDate(item.startDate)}`;
-      return `<div class="tx-item">
+      return `<div class="tx-item recurring-item">
         <div class="tx-dot" style="background:${c.color}"></div>
-        <div class="tx-info">
-          <div class="tx-name">${escapeHtml(item.desc)}<span class="badge badge-${item.type}">${typeLabel(item.type)}</span></div>
-          <div class="tx-meta">${escapeHtml(c.label)} - ${escapeHtml(item.person)} - ${item.frequency}${item.active ? '' : ' - paused'}</div>
-          <div class="tx-date">${escapeHtml(nextText)}</div>
-        </div>
-        <span class="tx-amt ${item.type}">${typeSign(item.type)}${money(item.amount)}</span>
-        <div class="tx-actions">
-          <button class="btn-edit" data-rec-edit="${item.id}" type="button">Edit</button>
-          <button class="btn-edit" data-rec-toggle="${item.id}" type="button">${item.active ? 'Pause' : 'Resume'}</button>
-          <button class="btn-del" data-rec-delete="${item.id}" type="button">Delete</button>
+        <div class="tx-main">
+          <div class="tx-info">
+            <div class="tx-name">${escapeHtml(item.desc)}<span class="badge badge-${item.type}">${typeLabel(item.type)}</span></div>
+            <div class="tx-meta">${escapeHtml(c.label)} - ${escapeHtml(item.person)} - ${item.frequency}${item.active ? '' : ' - paused'}</div>
+            <div class="tx-date">${escapeHtml(nextText)}</div>
+          </div>
+          <span class="tx-amt ${item.type}">${typeSign(item.type)}${money(item.amount)}</span>
+          <div class="tx-actions">
+            <button class="btn-edit" data-rec-edit="${item.id}" type="button">Edit</button>
+            <button class="btn-edit" data-rec-toggle="${item.id}" type="button">${item.active ? 'Pause' : 'Resume'}</button>
+            <button class="btn-del" data-rec-delete="${item.id}" type="button">Delete</button>
+          </div>
         </div>
       </div>`;
     }).join('');
