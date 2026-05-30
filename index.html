@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.2-recurring-planned-due';
+  const APP_VERSION = 'v2026.05.30.3-meta-sync-queue';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -431,6 +431,9 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     if (operation.action === 'add' || operation.action === 'update') {
       return BudgetSync.addTransaction(transactionToSync(normalizeTransaction(operation.tx || {})));
     }
+    if (operation.action === 'meta') {
+      return BudgetSync.addTransaction(encodeMetaRow(operation.metaType, operation.data));
+    }
     if (operation.action === 'delete' && String(operation.id || '').startsWith('legacy_')) return { ok: true };
     if (operation.action === 'delete') return BudgetSync.addTransaction(deleteTombstoneToSync(operation.id));
   }
@@ -531,9 +534,13 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     } catch (e) { return null; }
   }
 
+  function hasPendingMeta(type) {
+    return state.pendingSync.some(op => op.action === 'meta' && op.metaType === type);
+  }
+
   async function pushMetaToSheets(type, data) {
-    const row = encodeMetaRow(type, data);
-    try { await BudgetSync.addTransaction(row); } catch (e) { /* offline ok */ }
+    queueSync({ action:'meta', id:'meta_' + type, metaType:type, data });
+    await syncNow();
   }
 
   function parseRowTimestamp(tsRaw) {
@@ -567,17 +574,17 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     // Only skip if remote has no data AND we already have local data (avoids wiping on empty sheet).
     if (latest.recurring) {
       const parsed = (latest.recurring.data || []).map(normalizeRecurring);
-      state.recurring = parsed;
+      if (!hasPendingMeta('recurring')) state.recurring = parsed;
     }
     if (latest.budgets) {
       const remoteBudgets = latest.budgets.data || {};
-      if (Object.keys(remoteBudgets).length > 0 || Object.keys(state.budgets).length === 0) {
+      if (!hasPendingMeta('budgets') && (Object.keys(remoteBudgets).length > 0 || Object.keys(state.budgets).length === 0)) {
         state.budgets = remoteBudgets;
       }
     }
     if (latest.categories) {
       const remoteCats = latest.categories.data || [];
-      if (remoteCats.length > 0) {
+      if (!hasPendingMeta('categories') && remoteCats.length > 0) {
         state.categories = mergeDefaultCategories(remoteCats);
       }
     }
