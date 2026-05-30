@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.6-repair-upload-acks';
+  const APP_VERSION = 'v2026.05.30.7-sync-stability';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -280,6 +280,9 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     currentMonth: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
     editingId: null,
   };
+
+  let syncInFlight = null;
+  let syncRerunPull = false;
 
   const $ = id => document.getElementById(id);
   const money = n => 'EUR ' + Math.abs(Number(n) || 0).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -327,7 +330,6 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const previous = localStorage.getItem(KEYS.appVersion);
     if (previous !== APP_VERSION) {
       localStorage.setItem(KEYS.appVersion, APP_VERSION);
-      state.deletedIds = [];
     }
   }
 
@@ -680,7 +682,22 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   // ──────────────────────────────────────────────────────────────────
 
   async function syncNow(options = {}) {
-    const pull = options && options.pull === false ? false : true;
+    const pull = !(options && options.pull === false);
+    if (syncInFlight) {
+      syncRerunPull = syncRerunPull || pull;
+      return syncInFlight;
+    }
+    syncInFlight = doSyncNow(pull).finally(async () => {
+      syncInFlight = null;
+      if (syncRerunPull) {
+        syncRerunPull = false;
+        await syncNow();
+      }
+    });
+    return syncInFlight;
+  }
+
+  async function doSyncNow(pull) {
     setSyncState('spin', 'Syncing...', state.pendingSync.length ? `${state.pendingSync.length} pending change(s)` : '');
     try {
       const localBeforeSync = state.transactions.slice();
