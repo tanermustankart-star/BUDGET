@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.1-recurring-overview';
+  const APP_VERSION = 'v2026.05.30.2-recurring-planned-due';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -750,7 +750,6 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const end = item.endDate ? new Date(item.endDate + 'T00:00:00') : null;
     const today = new Date(todayIso() + 'T00:00:00');
     const dates = [];
-    if (start > monthEnd) return dates;
     if (end && end < monthStart) return dates;
     const pushIfDue = (date) => {
       if (date >= monthStart && date <= monthEnd && (!end || date <= end) && (includeFuture || date <= today)) {
@@ -763,12 +762,14 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       return dates;
     }
     if (item.frequency === 'yearly') {
+      if (start > monthEnd) return dates;
       if (start.getMonth() === monthStart.getMonth()) {
         const day = Math.min(start.getDate(), monthEnd.getDate());
         pushIfDue(new Date(monthStart.getFullYear(), monthStart.getMonth(), day));
       }
       return dates;
     }
+    if (start > monthEnd) return dates;
     const step = item.frequency === 'biweekly' ? 14 : 7;
     const d = new Date(start);
     while (d < monthStart) d.setDate(d.getDate() + step);
@@ -854,7 +855,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function monthTx(ym = state.currentMonth) {
-    return [...manualMonthTx(ym), ...recurringForMonth(ym)];
+    return [...manualMonthTx(ym), ...dueRecurringForMonth(ym)];
   }
 
   function isGeneratedRecurringTransaction(t) {
@@ -883,6 +884,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   function totalsFor(ym = state.currentMonth) {
     const tx = monthTx(ym);
+    const plannedRecurring = recurringForMonth(ym);
     const upcoming = upcomingRecurringForMonth(ym);
     return {
       income: tx.filter(t => t.type === 'income').reduce((a,t) => a + t.amount, 0),
@@ -890,7 +892,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       savings: tx.filter(t => t.type === 'savings').reduce((a,t) => a + t.amount, 0),
       budgetSavings: tx.filter(t => t.type === 'savings' && t.savingsSource !== 'external').reduce((a,t) => a + t.amount, 0),
       externalSavings: tx.filter(t => t.type === 'savings' && t.savingsSource === 'external').reduce((a,t) => a + t.amount, 0),
-      recurringExpense: recurringForMonth(ym).filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0),
+      recurringExpense: plannedRecurring.filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0),
       manualExpense: manualMonthTx(ym).filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0),
       upcomingRecurringIncome: upcoming.filter(t => t.type === 'income').reduce((a,t) => a + t.amount, 0),
       upcomingRecurringExpense: upcoming.filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0),
@@ -900,7 +902,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   function renderMetrics() {
     const totals = totalsFor();
     const balance = totals.income - totals.expense - totals.budgetSavings;
-    const projectedBalance = balance;
+    const projectedBalance = balance + totals.upcomingRecurringIncome - totals.upcomingRecurringExpense;
     const prev = addMonths(state.currentMonth, -1);
     const prevExpense = totalsFor(prev).expense;
     const mom = prevExpense ? ((totals.expense - prevExpense) / prevExpense) * 100 : 0;
@@ -951,17 +953,18 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function renderRecurringSummary() {
-    const tx = dueRecurringForMonth();
+    const planned = recurringForMonth();
+    const due = dueRecurringForMonth();
     const upcoming = upcomingRecurringForMonth();
-    if (!tx.length && !upcoming.length) { $('recurring-summary').innerHTML = '<p class="empty">No recurring payments for this month</p>'; return; }
-    const income = tx.filter(t => t.type === 'income').reduce((a,t) => a + t.amount, 0);
-    const expense = tx.filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0);
+    if (!planned.length) { $('recurring-summary').innerHTML = '<p class="empty">No recurring payments for this month</p>'; return; }
+    const dueIncome = due.filter(t => t.type === 'income').reduce((a,t) => a + t.amount, 0);
+    const dueExpense = due.filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0);
+    const plannedExpense = planned.filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0);
     const upcomingExpense = upcoming.filter(t => t.type === 'expense').reduce((a,t) => a + t.amount, 0);
-    const dueHtml = tx.length ? tx.map(t => renderTxItem(t, { noActions: true })).join('') : '<p class="empty">No recurring payments are due yet</p>';
-    const upcomingHtml = upcoming.length ? `<div class="date-heading">Upcoming</div>${upcoming.map(t => renderTxItem(t, { noActions: true, upcoming: true })).join('')}` : '';
-    $('recurring-summary').innerHTML = dueHtml + upcomingHtml +
-      `<div style="display:flex;justify-content:space-between;padding-top:10px;font-size:13px;font-weight:700;"><span>Due recurring income</span><span style="color:var(--success)">${money(income)}</span></div>
-       <div style="display:flex;justify-content:space-between;padding-top:4px;font-size:13px;font-weight:700;"><span>Due recurring expenses</span><span style="color:var(--danger)">${money(expense)}</span></div>
+    $('recurring-summary').innerHTML = planned.map(t => renderTxItem(t, { noActions: true })).join('') +
+      `<div style="display:flex;justify-content:space-between;padding-top:10px;font-size:13px;font-weight:700;"><span>Due recurring income</span><span style="color:var(--success)">${money(dueIncome)}</span></div>
+       <div style="display:flex;justify-content:space-between;padding-top:4px;font-size:13px;font-weight:700;"><span>Due recurring expenses</span><span style="color:var(--danger)">${money(dueExpense)}</span></div>
+       <div style="display:flex;justify-content:space-between;padding-top:4px;font-size:13px;font-weight:700;"><span>Planned recurring expenses</span><span style="color:var(--danger)">${money(plannedExpense)}</span></div>
        <div style="display:flex;justify-content:space-between;padding-top:4px;font-size:13px;font-weight:700;"><span>Upcoming recurring expenses</span><span style="color:var(--danger)">${money(upcomingExpense)}</span></div>`;
   }
 
