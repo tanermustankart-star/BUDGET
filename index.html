@@ -241,10 +241,11 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.4-fast-pending-sync';
+  const APP_VERSION = 'v2026.05.30.5-chunked-meta-sync';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
+  const META_CHUNK_RE = /^\[\[fbmetachunk:([^:]+):([^:]+):(\d+):(\d+):(.+)\]\]$/;
 
   const TYPE_OPTIONS = [
     { value: 'income', label: 'Income' },
@@ -432,7 +433,9 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       return BudgetSync.addTransaction(transactionToSync(normalizeTransaction(operation.tx || {})));
     }
     if (operation.action === 'meta') {
-      return BudgetSync.addTransaction(encodeMetaRow(operation.metaType, operation.data));
+      const rows = encodeMetaRows(operation.metaType, operation.data);
+      for (const row of rows) await BudgetSync.addTransaction(row);
+      return { ok: true };
     }
     if (operation.action === 'delete' && String(operation.id || '').startsWith('legacy_')) return { ok: true };
     if (operation.action === 'delete') return BudgetSync.addTransaction(deleteTombstoneToSync(operation.id));
@@ -525,6 +528,34 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     };
   }
 
+  function encodeMetaRows(type, data) {
+    const json = JSON.stringify(data);
+    const b64 = btoa(unescape(encodeURIComponent(json)));
+    if (b64.length <= 1400) return [encodeMetaRow(type, data)];
+    const ts = Date.now();
+    const syncId = ts.toString(36);
+    const size = 1200;
+    const chunks = [];
+    for (let i = 0; i < b64.length; i += size) chunks.push(b64.slice(i, i + size));
+    return chunks.map((chunk, index) => {
+      const marker = `[[fbmetachunk:${type}:${syncId}:${index}:${chunks.length}:${chunk}]]`;
+      return {
+        id: `meta_${type}_${syncId}_${index}`,
+        createdAt: nowLocal(),
+        month: state.currentMonth,
+        date: todayIso(),
+        type: 'expense',
+        person: 'System',
+        description: marker,
+        desc: marker,
+        category: 'other',
+        cat: 'other',
+        amount: 0.01,
+        recurringId: '',
+      };
+    });
+  }
+
   function decodeMetaRow(description) {
     const m = String(description || '').match(META_ROW_RE);
     if (!m) return null;
@@ -532,6 +563,12 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       const json = decodeURIComponent(escape(atob(m[2])));
       return { type: m[1], data: JSON.parse(json) };
     } catch (e) { return null; }
+  }
+
+  function decodeMetaChunk(description) {
+    const m = String(description || '').match(META_CHUNK_RE);
+    if (!m) return null;
+    return { type: m[1], syncId: m[2], index: Number(m[3]), total: Number(m[4]), b64: m[5] };
   }
 
   function hasPendingMeta(type) {
@@ -558,16 +595,33 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   function applyMetaFromSheet(rows) {
     // Collect latest meta row per type from sheet rows (by row index = last-write-wins)
     const latest = {};
+    const chunkGroups = {};
     rows.forEach((row, rowIndex) => {
       const desc = sheetRowDescription(row);
       const meta = decodeMetaRow(desc);
-      if (!meta) return;
       const tsRaw = Array.isArray(row) ? row[1] : (row.createdAt || row.CreatedAt || '');
       // Use parsed timestamp; fall back to row index so later rows always win when timestamps are equal/missing
       const rowTs = parseRowTimestamp(tsRaw) || rowIndex;
-      if (!latest[meta.type] || rowTs >= latest[meta.type].ts) {
+      if (meta && (!latest[meta.type] || rowTs >= latest[meta.type].ts)) {
         latest[meta.type] = { ts: rowTs, data: meta.data };
       }
+      const chunk = decodeMetaChunk(desc);
+      if (!chunk) return;
+      const key = chunk.type + ':' + chunk.syncId;
+      if (!chunkGroups[key]) chunkGroups[key] = { type: chunk.type, ts: rowTs, total: chunk.total, parts: [] };
+      chunkGroups[key].ts = Math.max(chunkGroups[key].ts, rowTs);
+      chunkGroups[key].parts[chunk.index] = chunk.b64;
+    });
+
+    Object.values(chunkGroups).forEach(group => {
+      if (group.parts.filter(Boolean).length !== group.total) return;
+      try {
+        const json = decodeURIComponent(escape(atob(group.parts.join(''))));
+        const data = JSON.parse(json);
+        if (!latest[group.type] || group.ts >= latest[group.type].ts) {
+          latest[group.type] = { ts: group.ts, data };
+        }
+      } catch (e) { /* ignore incomplete/corrupt meta chunks */ }
     });
 
     // Always apply remote meta when present — remote is source of truth across devices.
@@ -656,7 +710,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     rows.slice(start).forEach((row) => {
       // Skip meta rows
       const descField = sheetRowDescription(row);
-      if (META_ROW_RE.test(descField)) return;
+      if (META_ROW_RE.test(descField) || META_CHUNK_RE.test(descField)) return;
 
       const looksLikeNewRow = String(row[0] || '').toLowerCase() !== 'id' && String(row[6] || '').includes('[[fbclean:');
       const looksLikeSevenColumnLegacy = /^\d{4}-\d{2}$/.test(String(row[1] || '')) && ['income','expense','savings','gelir','gider','birikim'].includes(String(row[2] || '').toLowerCase());
