@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.5-chunked-meta-sync';
+  const APP_VERSION = 'v2026.05.30.6-repair-upload-acks';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -446,10 +446,34 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const remaining = [];
     for (const operation of state.pendingSync) {
       try { await runSyncOperation(operation); }
-      catch (err) { remaining.push(operation); }
+      catch (err) {
+        if (!await isOperationAlreadySynced(operation)) remaining.push(operation);
+      }
     }
     state.pendingSync = remaining;
     saveState();
+  }
+
+  async function isOperationAlreadySynced(operation) {
+    try {
+      const data = await BudgetSync.getAll();
+      const rows = extractSheetRows(data);
+      if (operation.action === 'meta') {
+        const remote = latestMetaDataFromRows(rows, operation.metaType);
+        return JSON.stringify(remote || null) === JSON.stringify(operation.data || null);
+      }
+      if (operation.action === 'add' || operation.action === 'update') {
+        return rows.some(row => {
+          const desc = sheetRowDescription(row);
+          const decoded = decodeSyncDescription(desc);
+          return decoded.id === operation.id;
+        });
+      }
+      if (operation.action === 'delete') {
+        return collectDeletedIdsFromRows(rows).includes(operation.id);
+      }
+    } catch (e) { /* keep pending if verification fails */ }
+    return false;
   }
 
   function transactionToSync(tx) {
@@ -571,6 +595,11 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     return { type: m[1], syncId: m[2], index: Number(m[3]), total: Number(m[4]), b64: m[5] };
   }
 
+  function latestMetaDataFromRows(rows, type) {
+    const latest = collectLatestMeta(rows);
+    return latest[type] ? latest[type].data : null;
+  }
+
   function hasPendingMeta(type) {
     return state.pendingSync.some(op => op.action === 'meta' && op.metaType === type);
   }
@@ -593,6 +622,29 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function applyMetaFromSheet(rows) {
+    const latest = collectLatestMeta(rows);
+
+    // Always apply remote meta when present — remote is source of truth across devices.
+    // Only skip if remote has no data AND we already have local data (avoids wiping on empty sheet).
+    if (latest.recurring) {
+      const parsed = (latest.recurring.data || []).map(normalizeRecurring);
+      if (!hasPendingMeta('recurring')) state.recurring = parsed;
+    }
+    if (latest.budgets) {
+      const remoteBudgets = latest.budgets.data || {};
+      if (!hasPendingMeta('budgets') && (Object.keys(remoteBudgets).length > 0 || Object.keys(state.budgets).length === 0)) {
+        state.budgets = remoteBudgets;
+      }
+    }
+    if (latest.categories) {
+      const remoteCats = latest.categories.data || [];
+      if (!hasPendingMeta('categories') && remoteCats.length > 0) {
+        state.categories = mergeDefaultCategories(remoteCats);
+      }
+    }
+  }
+
+  function collectLatestMeta(rows) {
     // Collect latest meta row per type from sheet rows (by row index = last-write-wins)
     const latest = {};
     const chunkGroups = {};
@@ -623,25 +675,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
         }
       } catch (e) { /* ignore incomplete/corrupt meta chunks */ }
     });
-
-    // Always apply remote meta when present — remote is source of truth across devices.
-    // Only skip if remote has no data AND we already have local data (avoids wiping on empty sheet).
-    if (latest.recurring) {
-      const parsed = (latest.recurring.data || []).map(normalizeRecurring);
-      if (!hasPendingMeta('recurring')) state.recurring = parsed;
-    }
-    if (latest.budgets) {
-      const remoteBudgets = latest.budgets.data || {};
-      if (!hasPendingMeta('budgets') && (Object.keys(remoteBudgets).length > 0 || Object.keys(state.budgets).length === 0)) {
-        state.budgets = remoteBudgets;
-      }
-    }
-    if (latest.categories) {
-      const remoteCats = latest.categories.data || [];
-      if (!hasPendingMeta('categories') && remoteCats.length > 0) {
-        state.categories = mergeDefaultCategories(remoteCats);
-      }
-    }
+    return latest;
   }
   // ──────────────────────────────────────────────────────────────────
 
