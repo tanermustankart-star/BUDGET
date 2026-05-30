@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.29.13-apply-empty-meta';
+  const APP_VERSION = 'v2026.05.30.1-recurring-overview';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -742,7 +742,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     return [t.date, t.type, t.person, t.desc, t.cat, Number(t.amount || 0).toFixed(2), t.savingsSource || ''].join('|').toLowerCase();
   }
 
-  function recurringDatesInMonth(item, ym, includeFuture = false) {
+  function recurringDatesInMonth(item, ym, includeFuture = true) {
     if (!item.active) return [];
     const start = new Date(item.startDate + 'T00:00:00');
     const monthStart = new Date(Number(ym.slice(0,4)), Number(ym.slice(5,7)) - 1, 1);
@@ -810,9 +810,28 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     });
   }
 
+  function dueRecurringForMonth(ym = state.currentMonth) {
+    return state.recurring.flatMap(item => {
+      const dates = recurringDatesInMonth(item, ym, false);
+      if (!dates.length) return [];
+      return dates.map((date, index) => normalizeTransaction({
+        id: 'virtual_' + item.id + '_' + date + '_' + index,
+        createdAt: 'Due ' + date,
+        month: ym,
+        date,
+        type: item.type,
+        person: item.person || 'Recurring',
+        description: item.desc,
+        category: item.cat,
+        amount: item.amount,
+        recurringId: item.id,
+      }));
+    });
+  }
+
   function upcomingRecurringForMonth(ym = state.currentMonth) {
     return state.recurring.flatMap(item => {
-      const due = new Set(recurringDatesInMonth(item, ym));
+      const due = new Set(recurringDatesInMonth(item, ym, false));
       return recurringAllDatesInMonth(item, ym)
         .filter(date => !due.has(date))
         .map((date, index) => normalizeTransaction({
@@ -881,7 +900,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   function renderMetrics() {
     const totals = totalsFor();
     const balance = totals.income - totals.expense - totals.budgetSavings;
-    const projectedBalance = balance + totals.upcomingRecurringIncome - totals.upcomingRecurringExpense;
+    const projectedBalance = balance;
     const prev = addMonths(state.currentMonth, -1);
     const prevExpense = totalsFor(prev).expense;
     const mom = prevExpense ? ((totals.expense - prevExpense) / prevExpense) * 100 : 0;
@@ -932,7 +951,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
 
   function renderRecurringSummary() {
-    const tx = recurringForMonth();
+    const tx = dueRecurringForMonth();
     const upcoming = upcomingRecurringForMonth();
     if (!tx.length && !upcoming.length) { $('recurring-summary').innerHTML = '<p class="empty">No recurring payments for this month</p>'; return; }
     const income = tx.filter(t => t.type === 'income').reduce((a,t) => a + t.amount, 0);
@@ -991,7 +1010,8 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const canEdit = !options.noActions && !recurring;
     const itemDate = formatEntryDate(t.date);
     const createdText = t.createdAt ? ` - Added ${escapeHtml(shortDateTime(t.createdAt))}` : '';
-    const upcomingBadge = options.upcoming ? '<span class="badge badge-expense">Upcoming</span>' : '';
+    const isUpcomingRecurring = recurring && String(t.date || '').slice(0, 10) > todayIso();
+    const upcomingBadge = (options.upcoming || isUpcomingRecurring) ? '<span class="badge badge-expense">Upcoming</span>' : '';
     return `<div class="tx-item">
       <div class="tx-dot" style="background:${c.color}"></div>
       <div class="tx-info">
