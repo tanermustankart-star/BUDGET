@@ -241,7 +241,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.3-meta-sync-queue';
+  const APP_VERSION = 'v2026.05.30.4-fast-pending-sync';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -540,7 +540,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
 
   async function pushMetaToSheets(type, data) {
     queueSync({ action:'meta', id:'meta_' + type, metaType:type, data });
-    await syncNow();
+    await syncNow({ pull:false });
   }
 
   function parseRowTimestamp(tsRaw) {
@@ -591,24 +591,29 @@ input[type="color"] { padding: 3px; min-height: 41px; }
   }
   // ──────────────────────────────────────────────────────────────────
 
-  async function syncNow() {
+  async function syncNow(options = {}) {
+    const pull = options && options.pull === false ? false : true;
     setSyncState('spin', 'Syncing...', state.pendingSync.length ? `${state.pendingSync.length} pending change(s)` : '');
     try {
       const localBeforeSync = state.transactions.slice();
       await flushPendingSync();
-      const data = await BudgetSync.getAll();
-      const rows = extractSheetRows(data);
-      if (rows.length) {
-        // Apply meta (recurring/budgets/categories) from sheet BEFORE filtering
-        applyMetaFromSheet(rows);
-        const parsed = parseSheetRows(rows).filter(t => !state.deletedIds.includes(t.id));
-        // Collect delete tombstones from sheet and merge into local deletedIds
-        const sheetDeletedIds = collectDeletedIdsFromRows(rows);
-        sheetDeletedIds.forEach(id => { if (!state.deletedIds.includes(id)) state.deletedIds.push(id); });
-        state.transactions = mergeById(parsed, localBeforeSync).filter(t => !state.deletedIds.includes(t.id));
+      if (pull) {
+        const data = await BudgetSync.getAll();
+        const rows = extractSheetRows(data);
+        if (rows.length) {
+          // Apply meta (recurring/budgets/categories) from sheet BEFORE filtering
+          applyMetaFromSheet(rows);
+          const parsed = parseSheetRows(rows).filter(t => !state.deletedIds.includes(t.id));
+          // Collect delete tombstones from sheet and merge into local deletedIds
+          const sheetDeletedIds = collectDeletedIdsFromRows(rows);
+          sheetDeletedIds.forEach(id => { if (!state.deletedIds.includes(id)) state.deletedIds.push(id); });
+          state.transactions = mergeById(parsed, localBeforeSync).filter(t => !state.deletedIds.includes(t.id));
+        }
       }
       saveState();
-      const detail = `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
+      const detail = pull
+        ? `${APP_VERSION} - ${state.transactions.length} cloud entries - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`
+        : `${APP_VERSION} - saved - ${new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
       if (state.pendingSync.length) {
         setSyncState('err', 'Sync pending', `${state.pendingSync.length} change(s) not uploaded`);
       } else {
@@ -1238,7 +1243,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     saveState();
     renderAll();
     clearEntryForm();
-    await syncNow();
+    await syncNow({ pull:false });
     } catch (err) {
       $('f-msg').style.color = 'var(--danger)';
       $('f-msg').textContent = 'Save failed: ' + (err && err.message ? err.message : 'Unknown error');
@@ -1296,7 +1301,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     queueSync({ action:'delete', id });
     saveState();
     renderAll();
-    await syncNow();
+    await syncNow({ pull:false });
   }
 
   async function editRecurring(id) {
@@ -1503,8 +1508,8 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       if (!document.hidden) syncNow();
     });
     setInterval(() => {
-      if (!document.hidden) syncNow();
-    }, 20000);
+      if (!document.hidden) syncNow({ pull: !state.pendingSync.length });
+    }, 8000);
   }
 
   window.addEventListener('DOMContentLoaded', () => init().catch(err => console.error('Init error:', err)));
