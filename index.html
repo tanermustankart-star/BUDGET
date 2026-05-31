@@ -265,7 +265,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     appVersion: 'fb_clean_appVersion',
   };
 
-  const APP_VERSION = 'v2026.05.30.9-polished-recurring-ui';
+  const APP_VERSION = 'v2026.05.31.1-total-wealth-metric';
   const SYNC_ID_RE = /\s*\[\[fbclean:([^\]]+)\]\]\s*$/;
   const SYNC_DELETE_RE = /^\[\[fbcleandel:([^\]]+)\]\]$/;
   const META_ROW_RE = /^\[\[fbmeta:([^:]+):(.+)\]\]$/;
@@ -1043,10 +1043,10 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     const totals = totalsFor();
     const balance = totals.income - totals.expense - totals.budgetSavings;
     const projectedBalance = balance + totals.upcomingRecurringIncome - totals.upcomingRecurringExpense;
+    const wealth = totalWealthThroughMonth();
     const prev = addMonths(state.currentMonth, -1);
     const prevExpense = totalsFor(prev).expense;
     const mom = prevExpense ? ((totals.expense - prevExpense) / prevExpense) * 100 : 0;
-    const top = topSpendingCategory();
     const savingsRate = totals.income ? Math.round((totals.budgetSavings / totals.income) * 100) : 0;
     $('metrics').innerHTML = [
       metric('Income', money(totals.income), 'var(--success)'),
@@ -1059,7 +1059,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
       metric('Upcoming recurring', money(totals.upcomingRecurringExpense), 'var(--danger)'),
       metric('Manual expenses', money(totals.manualExpense), 'var(--danger)'),
       metric('Projected balance', (projectedBalance < 0 ? '-' : '') + money(projectedBalance), projectedBalance >= 0 ? 'var(--success)' : 'var(--danger)'),
-      metric('Top category', top.label, 'var(--text)'),
+      metric('Total wealth', (wealth < 0 ? '-' : '') + money(wealth), wealth >= 0 ? 'var(--success)' : 'var(--danger)'),
       metric('Expense change', (mom >= 0 ? '+' : '') + Math.round(mom) + '%', mom <= 0 ? 'var(--success)' : 'var(--danger)'),
     ].join('');
   }
@@ -1073,6 +1073,26 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     monthTx().filter(t => t.type === 'expense').forEach(t => totals[t.cat] = (totals[t.cat] || 0) + t.amount);
     const top = Object.entries(totals).sort((a,b) => b[1] - a[1])[0];
     return top ? { label: categoryById(top[0]).label, amount: top[1] } : { label: 'None', amount: 0 };
+  }
+
+  function totalWealthThroughMonth(ym = state.currentMonth) {
+    const candidates = [
+      ...state.transactions
+        .filter(t => !state.deletedIds.includes(t.id) && monthOf(t) <= ym)
+        .map(monthOf),
+      ...state.recurring
+        .filter(item => item.active && String(item.startDate || '').slice(0, 7) <= ym)
+        .map(item => String(item.startDate || '').slice(0, 7)),
+      ym,
+    ].filter(Boolean).sort();
+    let month = candidates[0] || ym;
+    let total = 0;
+    while (month <= ym) {
+      const totals = totalsFor(month);
+      total += totals.income - totals.expense + totals.externalSavings;
+      month = addMonths(month, 1);
+    }
+    return total;
   }
 
   function renderCatSummary() {
@@ -1652,7 +1672,7 @@ input[type="color"] { padding: 3px; min-height: 41px; }
     <header class="topbar">
       <div>
         <div class="topbar-title">Sofi & Taner Budget</div>
-        <div class="topbar-subtitle" id="sync-detail">v2026.05.29.8-mobile-delete-fix</div>
+        <div class="topbar-subtitle" id="sync-detail">v2026.05.31.1-total-wealth-metric</div>
       </div>
       <div class="sync-pill">
         <div class="sdot spin" id="sdot"></div>
